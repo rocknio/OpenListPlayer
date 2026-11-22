@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 
 import '../../player/playback_controller.dart';
 import '../widgets.dart';
+import 'audio_theme.dart';
 
 const kSpeedPresets = [0.5, 0.75, 1.0, 1.25, 1.5, 2.0];
 
@@ -46,6 +47,66 @@ Future<void> _showPlayerSheet(
 }
 
 Future<void> showSpeedPanel(BuildContext context, PlaybackController playback, {bool dark = false}) {
+  // 音频页（dark=false）按设计稿用「标题 + 行式列表 + 勾选」；
+  // 视频播放页（dark=true）是纯黑沉浸场景，保留紧凑的 chip 布局。
+  if (!dark) {
+    return showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: AudioTone.surface,
+      isScrollControlled: true,
+      constraints: BoxConstraints(maxHeight: MediaQuery.sizeOf(context).height * 0.72),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (sheetContext) => SafeArea(
+        top: false,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const SizedBox(height: 14),
+            SizedBox(
+              height: 44,
+              child: Row(
+                children: [
+                  const SizedBox(width: 44),
+                  const Expanded(
+                    child: Center(
+                      child: Text(
+                        '播放速度',
+                        style: TextStyle(
+                          fontSize: 15,
+                          fontWeight: FontWeight.w600,
+                          color: AudioTone.ink,
+                        ),
+                      ),
+                    ),
+                  ),
+                  IconButton(
+                    tooltip: '关闭',
+                    icon: const Icon(Icons.close, size: 20, color: AudioTone.muted),
+                    onPressed: () => Navigator.pop(sheetContext),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 2),
+            Flexible(
+              child: ListView(
+                shrinkWrap: true,
+                padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+                children: [
+                  for (final s in kSpeedPresets)
+                    _speedRow(sheetContext, playback, s,
+                        (playback.speed - s).abs() < 0.01),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   return _showPlayerSheet(context, dark, builder: (sheetContext) {
     return Column(
       mainAxisSize: MainAxisSize.min,
@@ -74,6 +135,54 @@ Future<void> showSpeedPanel(BuildContext context, PlaybackController playback, {
       ],
     );
   });
+}
+
+/// 设计稿的倍速行：1.0× + 「正常」标签，选中行进显示浅陶土底与勾选圆点
+Widget _speedRow(
+  BuildContext sheetContext,
+  PlaybackController playback,
+  double speed,
+  bool selected,
+) {
+  final isNormal = (speed - 1.0).abs() < 0.01;
+  return Padding(
+    padding: const EdgeInsets.symmetric(vertical: 2),
+    child: Material(
+      color: selected ? AudioTone.accent.withValues(alpha: 0.10) : Colors.transparent,
+      borderRadius: BorderRadius.circular(12),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(12),
+        onTap: () {
+          playback.persistSpeed(speed);
+          Navigator.pop(sheetContext);
+        },
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
+          child: Row(
+            children: [
+              Text(
+                formatSpeed(speed),
+                style: TextStyle(
+                  fontSize: 14,
+                  fontWeight: FontWeight.w500,
+                  color: selected ? AudioTone.accent : AudioTone.ink,
+                ),
+              ),
+              if (isNormal) ...[
+                const SizedBox(width: 8),
+                Text('正常', style: AudioTone.rowMeta),
+              ],
+              const Spacer(),
+              if (selected)
+                const Icon(Icons.check_circle, size: 20, color: AudioTone.accent)
+              else
+                const Icon(Icons.circle_outlined, size: 20, color: AudioTone.sandDeep),
+            ],
+          ),
+        ),
+      ),
+    ),
+  );
 }
 
 Future<void> showAudioTrackPanel(BuildContext context, PlaybackController playback, {bool dark = true}) {
