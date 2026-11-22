@@ -1,0 +1,674 @@
+/// 视频播放页：竖屏内嵌 16:9 + 信息 + 队列；横屏全屏；手势（快进/亮度/音量/双击/长按3x）；
+/// 控制条（倍速/字幕/音轨/播放模式）；缓冲等待与错误重试覆盖层。
+library;
+
+import 'dart:async';
+
+import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:media_kit_video/media_kit_video.dart';
+import 'package:screen_brightness/screen_brightness.dart';
+import 'package:wakelock_plus/wakelock_plus.dart';
+
+import '../../core/models.dart';
+import '../../player/playback_controller.dart';
+import '../../providers.dart';
+import '../widgets.dart';
+import 'panels.dart';
+
+/// 左右各让出的边缘宽度：水平拖动 seek 不在此区域起手，保留给 iOS 系统返回手势
+const double kEdgeGestureGuard = 24;
+
+class PlayerScreen extends ConsumerStatefulWidget {
+  const PlayerScreen({super.key});
+
+  @override
+  ConsumerState<PlayerScreen> createState() => _PlayerScreenState();
+}
+
+class _PlayerScreenState extends ConsumerState<PlayerScreen> {
+  bool _controlsVisible = true;
+  Timer? _hideTimer;
+  double _volume = 100;
+  double _brightness = 0.5;
+  bool _brightnessReady = false;
+
+  // 手势状态
+  double? _dragStartX; // 垂直手势起点的本地 x（判断左/右半屏）
+  double _seekAccumSeconds = 0; // 水平手势累计的秒数
+
+  PlaybackController? _playback;
+
+  @override
+  void initState() {
+    super.initState();
+    _volume = ref.read(playbackProvider).volume;
+    _resetHideTimer();
+    _loadBrightness();
+    WakelockPlus.enable();
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final playback = ref.read(playbackProvider);
+    if (identical(playback, _playback)) return;
+    _playback?.removeListener(_onPlaybackChanged);
+    _playback = playback..addListener(_onPlaybackChanged);
+  }
+
+  /// 出错时自动唤出控制层，否则错误与"重试/跳过"藏在被自动隐藏的控制层里。
+  /// notifyListeners 可能发生在 build/layout 阶段（如 replaceQueue 内部），
+  /// 直接 setState 会触发 markNeedsLayout during layout 断言，故推迟到帧后。
+  void _onPlaybackChanged() {
+    if (!mounted) return;
+    if (_playback?.status == PlaybackStatus.error && !_controlsVisible) {
+      _hideTimer?.cancel();
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted || _controlsVisible) return;
+        setState(() => _controlsVisible = true);
+      });
+    }
+  }
+
+  Future<void> _loadBrightness() async {
+    try {
+      _brightness = await ScreenBrightness().application;
+      _brightnessReady = true;
+    } catch (_) {}
+  }
+
+  @override
+  void dispose() {
+    _hideTimer?.cancel();
+    _playback?.removeListener(_onPlaybackChanged);
+    WakelockPlus.disable();
+    SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
+    super.dispose();
+  }
+
+  void _resetHideTimer() {
+    _hideTimer?.cancel();
+    _hideTimer = Timer(const Duration(seconds: 3), () {
+      if (mounted && ref.read(playbackProvider).player.state.playing) {
+        setState(() => _controlsVisible = false);
+      }
+    });
+  }
+
+  void _toggleControls() {
+    setState(() => _controlsVisible = !_controlsVisible);
+    if (_controlsVisible) _resetHideTimer();
+  }
+
+  Future<void> _enterFullscreen() async {
+    await SystemChrome.setPreferredOrientations([
+      DeviceOrientation.landscapeLeft,
+      DeviceOrientation.landscapeRight,
+    ]);
+    await SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
+  }
+
+  Future<void> _exitFullscreen() async {
+    await SystemChrome.setPreferredOrientations(DeviceOrientation.values);
+    await SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final playback = ref.watch(playbackProvider);
+    // PlaybackController 是 ChangeNotifier，Provider 本身不会因 notifyListeners 重建，
+    // 必须显式订阅，否则状态/队列/倍速变化不会反映到界面。
+    return ListenableBuilder(
+      listenable: playback,
+      builder: (context, _) {
+        final item = playback.current;
+        if (item == null) {
+          return Scaffold(
+            backgroundColor: Colors.black,
+            appBar: AppBar(title: const Text('播放'), backgroundColor: Colors.transparent),
+            body: const Center(child: Text('没有正在播放的内容', style: TextStyle(color: Colors.white54))),
+          );
+        }
+        return Scaffold(
+          backgroundColor: Colors.black,
+          body: OrientationBuilder(
+            builder: (context, orientation) {
+              final isLandscape = orientation == Orientation.landscape;
+              if (isLandscape) {
+                SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
+              }
+              return isLandscape ? _buildFullscreen(playback) : _buildPortrait(playback);
+            },
+          ),
+        );
+      },
+    );
+  }
+
+  // ---------- 竖屏：内嵌 16:9 + 信息 + 队列 ----------
+
+  Widget _buildPortrait(PlaybackController playback) {
+    return SafeArea(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          _videoArea(playback, fullscreen: false),
+          Expanded(
+            // 播放页底色固定黑，浅色模式下若沿用应用主题会得到深色文字 → 黑底黑字。
+            // 信息区与队列强制深色主题。
+            child: Theme(
+              data: ThemeData.dark(useMaterial3: true),
+              child: ListView(
+                padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
+                children: [
+                  Text(
+                    playback.current?.name ?? '',
+                    style: Theme.of(context)
+                        .textTheme
+                        .titleMedium
+                        ?.copyWith(fontWeight: FontWeight.w600, color: Colors.white),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    '${playback.current?.isVideo == true ? '视频' : '音频'} · ${playback.current?.parent ?? ''}',
+                    style: const TextStyle(color: Colors.white60, fontSize: 12),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  const SizedBox(height: 12),
+                  Text('播放队列 (${playback.queue.length})',
+                      style: const TextStyle(color: Colors.white70, fontSize: 13, fontWeight: FontWeight.w600)),
+                  const SizedBox(height: 4),
+                  for (var i = 0; i < playback.queue.length; i++)
+                    ListTile(
+                      dense: true,
+                      contentPadding: EdgeInsets.zero,
+                      selected: i == playback.index,
+                      selectedTileColor: Colors.white.withValues(alpha: 0.12),
+                      leading: Icon(
+                        playback.queue[i].isVideo ? Icons.movie_outlined : Icons.music_note_outlined,
+                        size: 20,
+                        color: i == playback.index ? Colors.white : Colors.white60,
+                      ),
+                      title: Text(playback.queue[i].name,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            fontSize: 13,
+                            color: i == playback.index ? Colors.white : Colors.white70,
+                          )),
+                      onTap: () => playback.jumpTo(i),
+                    ),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ---------- 横屏全屏 ----------
+
+  Widget _buildFullscreen(PlaybackController playback) {
+    return _videoArea(playback, fullscreen: true);
+  }
+
+  // ---------- 视频区域（含手势与控制层） ----------
+
+  Widget _videoArea(PlaybackController playback, {required bool fullscreen}) {
+    final content = Stack(
+      fit: StackFit.expand,
+      children: [
+        Positioned.fill(
+          child: Video(
+            controller: playback.videoController,
+            controls: NoVideoControls,
+            fit: BoxFit.contain,
+          ),
+        ),
+        // 缓冲/重连覆盖层
+        _statusOverlay(playback),
+        // 快进预览
+        if (_seekAccumSeconds != 0) _seekPreview(playback),
+        // 水平拖动 seek：左右各让出 kEdgeGestureGuard 给系统边缘返回手势
+        Positioned(
+          left: kEdgeGestureGuard,
+          right: kEdgeGestureGuard,
+          top: 0,
+          bottom: 0,
+          child: GestureDetector(
+            behavior: HitTestBehavior.translucent,
+            onHorizontalDragUpdate: (d) {
+              // 1 像素 = 0.5 秒（横向累计，松手提交）
+              setState(() => _seekAccumSeconds += d.delta.dx * 0.5);
+            },
+            onHorizontalDragEnd: (_) {
+              final secs = _seekAccumSeconds.round();
+              _seekAccumSeconds = 0;
+              if (secs != 0) playback.seekRelative(secs);
+              setState(() {});
+            },
+          ),
+        ),
+        // 控制层（在 seek 手势层之上，保证进度条拖动优先）
+        if (_controlsVisible) _controlsOverlay(playback, fullscreen: fullscreen),
+      ],
+    );
+
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: _toggleControls,
+      onDoubleTap: () => playback.togglePlay(),
+      onLongPressStart: (_) => playback.setTemporarySpeed(3.0),
+      onLongPressEnd: (_) => playback.restoreSpeed(),
+      onVerticalDragStart: (d) => _dragStartX = d.localPosition.dx,
+      onVerticalDragUpdate: (d) => _verticalDrag(playback, d),
+      onVerticalDragEnd: (_) => _dragStartX = null,
+      // 竖屏必须给视频区一个有限高度：Stack(fit: expand) 在 Column 的非 flex
+      // 子项里会拿到 h=∞ 约束，触发 "BoxConstraints forces an infinite height"。
+      child: fullscreen ? SizedBox.expand(child: content) : AspectRatio(aspectRatio: 16 / 9, child: content),
+    );
+  }
+
+  Widget _seekPreview(PlaybackController playback) {
+    final secs = _seekAccumSeconds.round();
+    final base = playback.player.state.position;
+    final target = secs >= 0
+        ? base + Duration(seconds: secs)
+        : (base.inSeconds + secs < 0 ? Duration.zero : base + Duration(seconds: secs));
+    return IgnorePointer(
+      child: Center(
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
+          decoration: BoxDecoration(color: Colors.black.withValues(alpha: 0.66), borderRadius: BorderRadius.circular(12)),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(secs > 0 ? Icons.fast_forward : Icons.fast_rewind, color: Colors.white),
+              const SizedBox(width: 10),
+              Text(
+                formatDuration(target),
+                style: const TextStyle(color: Colors.white, fontSize: 18, fontFeatures: [FontFeature.tabularFigures()]),
+              ),
+              const SizedBox(width: 10),
+              Text(
+                '${secs > 0 ? '+' : ''}$secs 秒',
+                style: const TextStyle(color: Colors.white70, fontSize: 13),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// 缓冲/打开提示：加半透明底板，避免落在亮画面上不可读
+  Widget _loadingPill(String label, {double? progress}) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
+      decoration: BoxDecoration(
+        color: Colors.black.withValues(alpha: 0.66),
+        borderRadius: BorderRadius.circular(14),
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const SizedBox(
+            width: 32,
+            height: 32,
+            child: CircularProgressIndicator(color: Colors.white, strokeWidth: 3),
+          ),
+          const SizedBox(height: 10),
+          Text(
+            progress == null ? label : '$label ${(progress * 100).clamp(0, 100).toStringAsFixed(0)}%',
+            style: const TextStyle(color: Colors.white, fontSize: 13),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// 已缓冲比例（无时长信息时返回 null）
+  double? _bufferedRatio(PlaybackController playback) {
+    final dur = playback.player.state.duration;
+    if (dur.inMilliseconds <= 0) return null;
+    final buffered = playback.player.state.buffer;
+    if (buffered.inMilliseconds <= 0) return null;
+    return (buffered.inMilliseconds / dur.inMilliseconds).clamp(0.0, 1.0);
+  }
+
+  Widget _statusOverlay(PlaybackController playback) {
+    return IgnorePointer(
+      child: Center(
+        child: switch (playback.status) {
+          PlaybackStatus.opening => _loadingPill('打开中…'),
+          PlaybackStatus.buffering => _loadingPill('缓冲中…', progress: _bufferedRatio(playback)),
+          PlaybackStatus.error => const SizedBox.shrink(),
+          _ => const SizedBox.shrink(),
+        },
+      ),
+    );
+  }
+
+  Widget _controlsOverlay(PlaybackController playback, {required bool fullscreen}) {
+    // 横屏全屏时控制层是唯一的安全区来源，需要自己避让刘海与 Home 指示条。
+    // 竖屏分支外层已有 SafeArea（padding 已被消耗），这里不能再加，否则重复内缩。
+    final pad = fullscreen ? MediaQuery.paddingOf(context) : EdgeInsets.zero;
+    // 竖屏内嵌 16:9 只有 ~226pt 高：顶栏 + 进度条 + 两行按钮放不下。
+    // 用 LayoutBuilder 依据实际高度决定按钮行是否精简。
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final compact = constraints.maxHeight < 300;
+        // 竖屏内嵌区只有 ~226pt：出错时进度条与按钮行已无意义，
+        // 让错误卡独占剩余空间，否则顶栏+错误卡+底栏必然溢出。
+        final errorOnly = compact && playback.status == PlaybackStatus.error;
+        return AnimatedOpacity(
+          opacity: _controlsVisible ? 1 : 0,
+          duration: const Duration(milliseconds: 200),
+          child: IgnorePointer(
+            ignoring: !_controlsVisible,
+            child: Column(
+              children: [
+                // 顶栏
+                Container(
+                  padding: EdgeInsets.fromLTRB(pad.left + 4, pad.top + 2, pad.right + 4, 2),
+                  decoration: const BoxDecoration(
+                    gradient: LinearGradient(
+                      begin: Alignment.topCenter,
+                      end: Alignment.bottomCenter,
+                      colors: [Colors.black54, Colors.transparent],
+                    ),
+                  ),
+                  child: Row(
+                    children: [
+                      IconButton(
+                        tooltip: '返回',
+                        icon: const Icon(Icons.arrow_back, color: Colors.white),
+                        onPressed: () async {
+                          final navigator = Navigator.of(context);
+                          if (fullscreen) {
+                            await _exitFullscreen();
+                          }
+                          if (mounted) navigator.maybePop();
+                        },
+                      ),
+                      Expanded(
+                        child: Text(
+                          playback.current?.name ?? '',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(color: Colors.white, fontSize: 14),
+                        ),
+                      ),
+                      if (!fullscreen)
+                        IconButton(
+                          tooltip: '全屏',
+                          icon: const Icon(Icons.fullscreen, color: Colors.white),
+                          onPressed: _enterFullscreen,
+                        )
+                      else
+                        IconButton(
+                          tooltip: '退出全屏',
+                          icon: const Icon(Icons.fullscreen_exit, color: Colors.white),
+                          onPressed: _exitFullscreen,
+                        ),
+                    ],
+                  ),
+                ),
+                const Spacer(),
+                // 错误操作按钮（居中）
+                if (playback.status == PlaybackStatus.error) _errorActions(playback, compact: compact),
+                const Spacer(),
+                // 底栏（错误态在竖屏小区域内隐藏，把空间留给错误卡）
+                if (!errorOnly)
+                  Container(
+                    padding: EdgeInsets.fromLTRB(pad.left + 8, 2, pad.right + 8, pad.bottom + 2),
+                    decoration: const BoxDecoration(
+                      gradient: LinearGradient(
+                        begin: Alignment.bottomCenter,
+                        end: Alignment.topCenter,
+                        colors: [Colors.black54, Colors.transparent],
+                      ),
+                    ),
+                    child: _bottomControls(playback, compact: compact || !fullscreen),
+                  ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _errorActions(PlaybackController playback, {bool compact = false}) {
+    return Container(
+      margin: EdgeInsets.symmetric(horizontal: 24, vertical: compact ? 0 : 8),
+      padding: EdgeInsets.symmetric(horizontal: compact ? 16 : 20, vertical: compact ? 10 : 16),
+      decoration: BoxDecoration(
+        color: Colors.black.withValues(alpha: 0.72),
+        borderRadius: BorderRadius.circular(14),
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(Icons.wifi_off, color: Colors.white70, size: compact ? 28 : 40),
+          SizedBox(height: compact ? 6 : 8),
+          Text(
+            playback.errorText ?? '播放失败',
+            textAlign: TextAlign.center,
+            maxLines: compact ? 2 : 3,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(color: Colors.white, fontSize: compact ? 12 : 13),
+          ),
+          SizedBox(height: compact ? 8 : 12),
+          Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              FilledButton.icon(
+                icon: const Icon(Icons.refresh),
+                label: const Text('重试'),
+                style: compact
+                    ? FilledButton.styleFrom(
+                        visualDensity: VisualDensity.compact,
+                        padding: const EdgeInsets.symmetric(horizontal: 14),
+                      )
+                    : null,
+                onPressed: () => playback.retryNow(),
+              ),
+              const SizedBox(width: 12),
+              OutlinedButton.icon(
+                icon: const Icon(Icons.skip_next, color: Colors.white),
+                label: const Text('跳过', style: TextStyle(color: Colors.white)),
+                style: OutlinedButton.styleFrom(
+                  side: const BorderSide(color: Colors.white54),
+                  foregroundColor: Colors.white,
+                  visualDensity: compact ? VisualDensity.compact : null,
+                  padding: compact ? const EdgeInsets.symmetric(horizontal: 14) : null,
+                ),
+                onPressed: () => playback.skipAfterError(),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _bottomControls(PlaybackController playback, {required bool compact}) {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        // 进度条
+        Row(
+          children: [
+            _positionText(playback),
+            Expanded(
+              child: StreamBuilder<Duration>(
+                stream: playback.player.stream.position,
+                builder: (context, snap) {
+                  final pos = snap.data ?? Duration.zero;
+                  final dur = playback.player.state.duration;
+                  return SliderTheme(
+                    data: SliderThemeData(
+                      trackHeight: 3,
+                      thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 7),
+                      // overlay 参与 Slider 的高度计算，22 → 44pt 命中区（iOS 最小触控尺寸）
+                      overlayShape: const RoundSliderOverlayShape(overlayRadius: 22),
+                    ),
+                    child: Slider(
+                      value: dur.inMilliseconds > 0
+                          ? pos.inMilliseconds.clamp(0, dur.inMilliseconds).toDouble()
+                          : 0,
+                      max: dur.inMilliseconds > 0 ? dur.inMilliseconds.toDouble() : 1,
+                      onChanged: (v) => playback.seek(Duration(milliseconds: v.toInt())),
+                    ),
+                  );
+                },
+              ),
+            ),
+            Text(
+              formatDuration(playback.player.state.duration),
+              style: const TextStyle(color: Colors.white70, fontSize: 12),
+            ),
+          ],
+        ),
+        // 按钮行：竖屏内嵌区只有 ~226pt 高，必须单行；横屏窄窗口才拆两行。
+        _buttonRow(playback, compact: compact),
+      ],
+    );
+  }
+
+  Widget _buttonRow(PlaybackController playback, {required bool compact}) {
+    final primary = <Widget>[
+      IconButton(
+        tooltip: '上一个',
+        icon: const Icon(Icons.skip_previous, color: Colors.white),
+        onPressed: () => playback.previous(),
+      ),
+      _playPause(playback),
+      IconButton(
+        tooltip: '下一个',
+        icon: const Icon(Icons.skip_next, color: Colors.white),
+        onPressed: () => playback.next(),
+      ),
+    ];
+    final secondary = <Widget>[
+      _speedButton(playback),
+      _subtitleButton(playback),
+      _audioButton(playback),
+      _modeButton(playback),
+    ];
+
+    if (compact) {
+      // 单行放全部控件；横向空间不足（窄机 / 大字号）时按比例缩小而不是溢出
+      return FittedBox(
+        fit: BoxFit.scaleDown,
+        child: Row(mainAxisSize: MainAxisSize.min, children: [...primary, ...secondary]),
+      );
+    }
+    if (MediaQuery.sizeOf(context).width < 560) {
+      return Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Row(mainAxisAlignment: MainAxisAlignment.spaceEvenly, children: primary),
+          Row(mainAxisAlignment: MainAxisAlignment.spaceEvenly, children: secondary),
+        ],
+      );
+    }
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+      children: [...primary, ...secondary],
+    );
+  }
+
+  Widget _positionText(PlaybackController playback) {
+    return StreamBuilder<Duration>(
+      stream: playback.player.stream.position,
+      builder: (context, snap) => Text(
+        formatDuration(snap.data ?? Duration.zero),
+        style: const TextStyle(color: Colors.white70, fontSize: 12),
+      ),
+    );
+  }
+
+  Widget _playPause(PlaybackController playback) {
+    return StreamBuilder<bool>(
+      stream: playback.player.stream.playing,
+      builder: (context, snap) {
+        final playing = snap.data ?? playback.player.state.playing;
+        return IconButton(
+          tooltip: playing ? '暂停' : '播放',
+          iconSize: 36,
+          icon: Icon(playing ? Icons.pause : Icons.play_arrow, color: Colors.white),
+          onPressed: () => playback.togglePlay(),
+        );
+      },
+    );
+  }
+
+  Widget _speedButton(PlaybackController playback) {
+    return TextButton(
+      onPressed: () => showSpeedPanel(context, playback, dark: true),
+      child: Text(
+        formatSpeed(playback.speed),
+        style: const TextStyle(color: Colors.white, fontSize: 13),
+      ),
+    );
+  }
+
+  Widget _subtitleButton(PlaybackController playback) {
+    return IconButton(
+      tooltip: '字幕',
+      icon: Icon(
+        playback.currentSubtitle != null ? Icons.subtitles : Icons.subtitles_outlined,
+        color: Colors.white,
+      ),
+      onPressed: () => showSubtitlePanel(context, playback),
+    );
+  }
+
+  Widget _audioButton(PlaybackController playback) {
+    return IconButton(
+      tooltip: '音轨',
+      icon: Icon(
+        playback.audioTracks.length > 1 ? Icons.graphic_eq : Icons.graphic_eq_outlined,
+        color: Colors.white,
+      ),
+      onPressed: playback.audioTracks.length > 1 ? () => showAudioTrackPanel(context, playback) : null,
+    );
+  }
+
+  Widget _modeButton(PlaybackController playback) {
+    final (icon, tip) = switch (playback.mode) {
+      PlayMode.sequentialLoop => (Icons.repeat, '列表循环'),
+      PlayMode.repeatOne => (Icons.repeat_one, '单曲循环'),
+      PlayMode.shuffle => (Icons.shuffle, '随机'),
+    };
+    return IconButton(
+      tooltip: tip,
+      icon: Icon(icon, color: Colors.white),
+      onPressed: () => playback.cycleMode(),
+    );
+  }
+
+  // ---------- 手势 ----------
+
+  void _verticalDrag(PlaybackController playback, DragUpdateDetails d) {
+    final startX = _dragStartX;
+    if (startX == null) return;
+    final isLeft = startX < MediaQuery.of(context).size.width / 2;
+    if (isLeft) {
+      // 左半屏上下滑：亮度
+      if (!_brightnessReady) return;
+      _brightness = (_brightness - d.delta.dy / 400).clamp(0.05, 1.0);
+      ScreenBrightness().setApplicationScreenBrightness(_brightness);
+    } else {
+      // 右半屏上下滑：音量
+      _volume = (_volume - d.delta.dy / 3).clamp(0, 100);
+      playback.setVolume(_volume);
+    }
+  }
+}
