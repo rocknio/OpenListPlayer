@@ -67,6 +67,32 @@ class CoverArt extends StatelessWidget {
   }
 }
 
+/// 音频占位封面图路径（浅色 / 深色），无缩略图时统一回退到矢量占位图。
+/// 深色版由同一矢量母版导出，仅提亮主色以适配暗背景。
+class AudioPlaceholderArt extends StatelessWidget {
+  const AudioPlaceholderArt({super.key, required this.isDark, this.size});
+
+  /// 深色模式用提亮版（#D2704A），浅色用陶土母版（#B85C38）。
+  final bool isDark;
+
+  /// 缩略图场景传入边长；大封面留空由父级 Stack 撑满。
+  final double? size;
+
+  static const lightAsset = 'assets/images/audio_placeholder.png';
+  static const darkAsset = 'assets/images/audio_placeholder_dark.png';
+
+  @override
+  Widget build(BuildContext context) {
+    final image = Image.asset(
+      isDark ? darkAsset : lightAsset,
+      fit: BoxFit.cover,
+      gaplessPlayback: true,
+    );
+    if (size == null) return image;
+    return SizedBox(width: size, height: size, child: image);
+  }
+}
+
 String formatFileSize(int bytes) {
   if (bytes <= 0) return '';
   const units = ['B', 'KB', 'MB', 'GB', 'TB'];

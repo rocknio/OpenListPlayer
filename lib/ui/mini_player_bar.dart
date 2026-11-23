@@ -7,6 +7,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../core/models.dart';
 import '../player/playback_controller.dart';
 import '../providers.dart';
+import 'widgets.dart';
 import 'player/audio_page.dart';
 import 'player/audio_theme.dart';
 import 'player/player_screen.dart';
@@ -48,7 +49,7 @@ class MiniPlayerBar extends ConsumerWidget {
                 padding: const EdgeInsets.fromLTRB(10, 10, 10, 10),
                 child: Row(
                   children: [
-                    _thumb(item, 44),
+                    _thumb(item, 44, isDark: isDark),
                     const SizedBox(width: 10),
                     Expanded(
                       child: Column(
@@ -82,21 +83,32 @@ class MiniPlayerBar extends ConsumerWidget {
     );
   }
 
-  Widget _thumb(QueueItem item, double size) {
+  Widget _thumb(QueueItem item, double size, {required bool isDark}) {
     final radius = size * 0.22;
+    // 音频无封面 / 加载失败回退到主题对应的矢量占位图；视频仍用影片图标。
+    Widget placeholder() {
+      if (item.isVideo) {
+        return Container(
+          width: size,
+          height: size,
+          decoration: BoxDecoration(
+            color: AudioTone.sand,
+            borderRadius: BorderRadius.circular(radius),
+          ),
+          child: Icon(
+            Icons.movie_outlined,
+            size: size * 0.44,
+            color: AudioTone.accent,
+          ),
+        );
+      }
+      return AudioPlaceholderArt(isDark: isDark, size: size);
+    }
+
     if (item.thumb.isEmpty) {
-      return Container(
-        width: size,
-        height: size,
-        decoration: BoxDecoration(
-          color: AudioTone.sand,
-          borderRadius: BorderRadius.circular(radius),
-        ),
-        child: Icon(
-          item.isVideo ? Icons.movie_outlined : Icons.music_note,
-          size: size * 0.44,
-          color: AudioTone.accent,
-        ),
+      return ClipRRect(
+        borderRadius: BorderRadius.circular(radius),
+        child: placeholder(),
       );
     }
     return ClipRRect(
@@ -106,12 +118,7 @@ class MiniPlayerBar extends ConsumerWidget {
         width: size,
         height: size,
         fit: BoxFit.cover,
-        errorBuilder: (_, _, _) => Container(
-          width: size,
-          height: size,
-          color: AudioTone.sand,
-          child: Icon(Icons.music_note, size: size * 0.44, color: AudioTone.accent),
-        ),
+        errorBuilder: (_, _, _) => placeholder(),
       ),
     );
   }

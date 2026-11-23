@@ -59,11 +59,6 @@ class _AudioPageState extends ConsumerState<AudioPage> {
           );
         }
 
-        final rows = <int>[
-          for (var i = 0; i < playback.queue.length; i++)
-            if (i != playback.index) i,
-        ];
-
         return Scaffold(
           backgroundColor: AudioTone.bg,
           body: SafeArea(
@@ -104,7 +99,7 @@ class _AudioPageState extends ConsumerState<AudioPage> {
                             const SizedBox(height: 10),
                             _currentCard(playback, item),
                             const SizedBox(height: 22),
-                            const Text('接下来播放', style: AudioTone.sectionLabel),
+                            const Text('播放列表', style: AudioTone.sectionLabel),
                             const SizedBox(height: 6),
                           ]),
                         ),
@@ -112,11 +107,8 @@ class _AudioPageState extends ConsumerState<AudioPage> {
                       SliverPadding(
                         padding: const EdgeInsets.symmetric(horizontal: AudioTone.pageH),
                         sliver: SliverList.builder(
-                          itemCount: rows.length,
-                          itemBuilder: (context, n) {
-                            final i = rows[n];
-                            return _queueRow(playback, i);
-                          },
+                          itemCount: playback.queue.length,
+                          itemBuilder: (context, i) => _queueRow(playback, i),
                         ),
                       ),
                       const SliverToBoxAdapter(child: SizedBox(height: 28)),
@@ -179,30 +171,7 @@ class _AudioPageState extends ConsumerState<AudioPage> {
                 fit: BoxFit.cover,
                 errorBuilder: (_, _, _) => const SizedBox.shrink(),
               ),
-            if (!hasThumb) ...[
-              const CustomPaint(painter: GridBackdrop()),
-              Center(
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Container(
-                      width: 196,
-                      height: 124,
-                      decoration: BoxDecoration(
-                        color: AudioTone.surface,
-                        borderRadius: BorderRadius.circular(18),
-                        boxShadow: const [
-                          BoxShadow(color: Color(0x14000000), blurRadius: 18, offset: Offset(0, 6)),
-                        ],
-                      ),
-                      child: const Icon(Icons.music_note, size: 56, color: AudioTone.taupe),
-                    ),
-                    const SizedBox(height: 16),
-                    const Text('暂无图片', style: AudioTone.meta),
-                  ],
-                ),
-              ),
-            ],
+            if (!hasThumb) const AudioPlaceholderArt(isDark: false),
           ],
         ),
       ),
@@ -470,19 +439,30 @@ class _AudioPageState extends ConsumerState<AudioPage> {
 
   Widget _thumb(QueueItem item, double size, {bool active = false}) {
     final radius = size * 0.22;
+    // 音频无封面 / 加载失败统一回退到矢量占位图；视频仍用影片图标区分。
+    Widget placeholder() {
+      if (item.isVideo) {
+        return Container(
+          width: size,
+          height: size,
+          decoration: BoxDecoration(
+            color: active ? AudioTone.sand : const Color(0xFFF1EDE5),
+            borderRadius: BorderRadius.circular(radius),
+          ),
+          child: Icon(
+            Icons.movie_outlined,
+            size: size * 0.42,
+            color: active ? AudioTone.accent : AudioTone.taupe,
+          ),
+        );
+      }
+      return AudioPlaceholderArt(isDark: false, size: size);
+    }
+
     if (item.thumb.isEmpty) {
-      return Container(
-        width: size,
-        height: size,
-        decoration: BoxDecoration(
-          color: active ? AudioTone.sand : const Color(0xFFF1EDE5),
-          borderRadius: BorderRadius.circular(radius),
-        ),
-        child: Icon(
-          item.isVideo ? Icons.movie_outlined : Icons.music_note,
-          size: size * 0.42,
-          color: active ? AudioTone.accent : AudioTone.taupe,
-        ),
+      return ClipRRect(
+        borderRadius: BorderRadius.circular(radius),
+        child: placeholder(),
       );
     }
     return ClipRRect(
@@ -492,12 +472,7 @@ class _AudioPageState extends ConsumerState<AudioPage> {
         width: size,
         height: size,
         fit: BoxFit.cover,
-        errorBuilder: (_, _, _) => Container(
-          width: size,
-          height: size,
-          color: const Color(0xFFF1EDE5),
-          child: Icon(Icons.music_note, size: size * 0.42, color: AudioTone.taupe),
-        ),
+        errorBuilder: (_, _, _) => placeholder(),
       ),
     );
   }
@@ -550,42 +525,86 @@ class _AudioPageState extends ConsumerState<AudioPage> {
 
   Widget _queueRow(PlaybackController playback, int index) {
     final item = playback.queue[index];
+    final isCurrent = index == playback.index;
     final source = item.parent == '/' ? '网盘' : item.parent.split('/').last;
-    return InkWell(
-      borderRadius: BorderRadius.circular(12),
-      onTap: () => playback.jumpTo(index),
-      child: Padding(
-        padding: const EdgeInsets.symmetric(vertical: 9),
-        child: Row(
-          children: [
-            SizedBox(
-              width: 24,
-              child: Text(
-                '${index + 1}'.padLeft(2, '0'),
-                style: AudioTone.rowMeta.copyWith(fontWeight: FontWeight.w500),
+    return Container(
+      margin: const EdgeInsets.symmetric(vertical: 2),
+      decoration: BoxDecoration(
+        color: isCurrent ? AudioTone.sand : Colors.transparent,
+        borderRadius: BorderRadius.circular(12),
+        border: isCurrent ? Border.all(color: AudioTone.taupe) : null,
+      ),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(12),
+        // 当前项保持在列表原位并高亮；点击它不重开播放，避免从头播放。
+        onTap: isCurrent ? null : () => playback.jumpTo(index),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 9),
+          child: Row(
+            children: [
+              SizedBox(
+                width: 24,
+                child: Text(
+                  '${index + 1}'.padLeft(2, '0'),
+                  style: isCurrent
+                      ? AudioTone.rowMeta.copyWith(
+                          color: AudioTone.accent,
+                          fontWeight: FontWeight.w700,
+                        )
+                      : AudioTone.rowMeta.copyWith(fontWeight: FontWeight.w500),
+                ),
               ),
-            ),
-            const SizedBox(width: 8),
-            _thumb(item, 40),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    item.name,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: AudioTone.rowTitle,
-                  ),
-                  const SizedBox(height: 3),
-                  Text(source, maxLines: 1, overflow: TextOverflow.ellipsis, style: AudioTone.rowMeta),
-                ],
+              const SizedBox(width: 8),
+              _thumb(item, 40, active: isCurrent),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      item.name,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: isCurrent
+                          ? AudioTone.rowTitle.copyWith(
+                              color: AudioTone.accent,
+                              fontWeight: FontWeight.w700,
+                            )
+                          : AudioTone.rowTitle,
+                    ),
+                    const SizedBox(height: 3),
+                    Text(
+                      source,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: isCurrent
+                          ? AudioTone.rowMeta.copyWith(color: AudioTone.accent)
+                          : AudioTone.rowMeta,
+                    ),
+                  ],
+                ),
               ),
-            ),
-            const SizedBox(width: 10),
-            Text(formatFileSize(item.size), style: AudioTone.rowMeta),
-          ],
+              const SizedBox(width: 10),
+              if (isCurrent)
+                const Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      '播放中',
+                      style: TextStyle(
+                        fontSize: 11,
+                        color: AudioTone.accent,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    SizedBox(width: 4),
+                    Icon(Icons.graphic_eq, size: 18, color: AudioTone.accent),
+                  ],
+                )
+              else
+                Text(formatFileSize(item.size), style: AudioTone.rowMeta),
+            ],
+          ),
         ),
       ),
     );
