@@ -22,7 +22,7 @@ class HomePage extends ConsumerWidget {
     final hasSite = ref.watch(hasSiteProvider);
     if (!hasSite) {
       return Scaffold(
-        appBar: AppBar(title: const Text('OpenListPlayer')),
+        appBar: AppBar(title: const Text('云序')),
         body: NoSiteHint(
           onGoSettings: () => ref.read(tabIndexProvider.notifier).set(3),
         ),
@@ -30,7 +30,7 @@ class HomePage extends ConsumerWidget {
     }
     final db = ref.watch(dbProvider);
     return Scaffold(
-      appBar: AppBar(title: const Text('OpenListPlayer')),
+      appBar: AppBar(title: const Text('云序')),
       body: ListView(
         padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
         children: [

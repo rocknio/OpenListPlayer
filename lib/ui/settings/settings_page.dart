@@ -184,7 +184,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
             ),
           ),
           _section(context, '关于'),
-          const ListTile(title: Text('OpenListPlayer'), subtitle: Text('v1.0.0 · 网络音视频播放器')),
+          const ListTile(title: Text('云序'), subtitle: Text('v1.0.0 · 云端音视频播放器')),
         ],
       ),
     );

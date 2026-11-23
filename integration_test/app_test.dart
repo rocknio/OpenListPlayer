@@ -32,7 +32,7 @@ void main() {
     await pumpFor(tester, const Duration(seconds: 3));
 
     // 1. 首页应出现（不再显示无站点引导）
-    expect(find.text('OpenListPlayer'), findsOneWidget);
+    expect(find.text('云序'), findsOneWidget);
     expect(find.textContaining('还未配置网盘地址'), findsNothing);
 
     // 2. 切到"文件" tab，应列出两个挂载目录

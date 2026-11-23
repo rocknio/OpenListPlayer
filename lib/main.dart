@@ -42,7 +42,7 @@ Future<void> main() async {
     config: const AudioServiceConfig(
       androidNotificationChannelId: 'playback',
       androidNotificationChannelName: '播放控制',
-      androidNotificationChannelDescription: 'OpenListPlayer 播放控制与进度',
+      androidNotificationChannelDescription: '云序 播放控制与进度',
       androidStopForegroundOnPause: false,
       androidShowNotificationBadge: false,
     ),

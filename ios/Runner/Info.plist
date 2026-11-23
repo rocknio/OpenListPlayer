@@ -7,7 +7,7 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
 	<key>CFBundleDisplayName</key>
-	<string>OpenListPlayer</string>
+	<string>云序</string>
 	<!-- 后台音频播放（audio_service） -->
 	<key>UIBackgroundModes</key>
 	<array>
