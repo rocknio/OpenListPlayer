@@ -7,6 +7,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../core/models.dart';
 import '../player/playback_controller.dart';
 import '../providers.dart';
+import 'app_theme.dart';
 import 'widgets.dart';
 import 'player/audio_page.dart';
 import 'player/audio_theme.dart';
@@ -27,9 +28,8 @@ class MiniPlayerBar extends ConsumerWidget {
         if (item == null) return const SizedBox.shrink();
 
         final isDark = Theme.of(context).brightness == Brightness.dark;
-        final card = isDark ? const Color(0xFF2A2724) : AudioTone.surface;
-        final titleColor = isDark ? const Color(0xFFF2EDE6) : AudioTone.ink;
-        final subColor = isDark ? const Color(0xFF9E958A) : AudioTone.muted;
+        final card = isDark ? AppPalette.darkSurface : AudioTone.surface;
+        final titleColor = isDark ? AppPalette.darkInk : AudioTone.ink;
 
         return Padding(
           padding: const EdgeInsets.fromLTRB(16, 0, 16, 6),
@@ -67,12 +67,12 @@ class MiniPlayerBar extends ConsumerWidget {
                             ),
                           ),
                           const SizedBox(height: 6),
-                          _progressLine(playback, subColor),
+                          _progressLine(playback, isDark: isDark),
                         ],
                       ),
                     ),
                     const SizedBox(width: 8),
-                    _PlayPauseButton(playback: playback),
+                    _PlayPauseButton(playback: playback, isDark: isDark),
                   ],
                 ),
               ),
@@ -123,7 +123,7 @@ class MiniPlayerBar extends ConsumerWidget {
     );
   }
 
-  Widget _progressLine(PlaybackController playback, Color trackColor) {
+  Widget _progressLine(PlaybackController playback, {required bool isDark}) {
     return StreamBuilder<Duration>(
       stream: playback.player.stream.position,
       builder: (context, snap) {
@@ -137,8 +137,10 @@ class MiniPlayerBar extends ConsumerWidget {
           child: LinearProgressIndicator(
             value: ratio,
             minHeight: 3,
-            backgroundColor: trackColor.withValues(alpha: 0.22),
-            valueColor: const AlwaysStoppedAnimation(Color(0xFFB85C38)),
+            backgroundColor: isDark ? AppPalette.darkSandDeep : AudioTone.sandDeep,
+            valueColor: AlwaysStoppedAnimation(
+              isDark ? AppPalette.darkAccent : AudioTone.accent,
+            ),
           ),
         );
       },
@@ -147,8 +149,9 @@ class MiniPlayerBar extends ConsumerWidget {
 }
 
 class _PlayPauseButton extends StatelessWidget {
-  const _PlayPauseButton({required this.playback});
+  const _PlayPauseButton({required this.playback, required this.isDark});
   final PlaybackController playback;
+  final bool isDark;
 
   @override
   Widget build(BuildContext context) {
@@ -160,7 +163,7 @@ class _PlayPauseButton extends StatelessWidget {
           button: true,
           label: playing ? '暂停' : '播放',
           child: Material(
-            color: AudioTone.accent,
+            color: isDark ? AppPalette.darkAccent : AudioTone.accent,
             shape: const CircleBorder(),
             child: InkWell(
               customBorder: const CircleBorder(),
@@ -171,7 +174,7 @@ class _PlayPauseButton extends StatelessWidget {
                 child: Icon(
                   playing ? Icons.pause : Icons.play_arrow,
                   size: 22,
-                  color: Colors.white,
+                  color: isDark ? AppPalette.darkBg : Colors.white,
                 ),
               ),
             ),

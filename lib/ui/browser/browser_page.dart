@@ -287,7 +287,7 @@ class _BrowserPageState extends ConsumerState<BrowserPage> {
           ? CircleAvatar(
               radius: 14,
               backgroundColor: Theme.of(context).colorScheme.primary,
-              child: const Icon(Icons.check, size: 16, color: Colors.white),
+              child: Icon(Icons.check, size: 16, color: Theme.of(context).colorScheme.onPrimary),
             )
           : leading,
       title: Text(

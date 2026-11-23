@@ -4,23 +4,18 @@ library;
 import 'package:flutter/material.dart';
 
 import '../../player/playback_controller.dart';
+import '../app_theme.dart';
 import '../widgets.dart';
 import 'audio_theme.dart';
 
 const kSpeedPresets = [0.5, 0.75, 1.0, 1.25, 1.5, 2.0];
 
-/// 播放器是纯黑背景，面板固定用深色，避免浅色模式下面板跳成白底。
-/// [dark] 由调用方决定：播放页传 true，音频页跟随应用主题。
-ThemeData _panelTheme(BuildContext context, bool dark) {
-  if (!dark) return Theme.of(context);
-  final scheme = ColorScheme.fromSeed(
-    seedColor: const Color(0xFF3F51B5),
-    brightness: Brightness.dark,
-  );
-  return ThemeData(colorScheme: scheme, brightness: Brightness.dark, useMaterial3: true);
-}
+/// 面板主题跟随调用方：[dark] 为 true 时用同色系深色变体，否则跟随全局米白主题。
+/// 全 App 统一浅色后，视频页面板也传 false，与音频页设计稿一致。
+ThemeData _panelTheme(BuildContext context, bool dark) =>
+    dark ? AppTheme.dark : Theme.of(context);
 
-/// 面板统一骨架：深色 + 可滚动列表 + 高度上限（横屏 402pt 高时不至于顶满）。
+/// 面板统一骨架：可滚动列表 + 高度上限（横屏 402pt 高时不至于顶满）。
 /// 字幕轨道可能很多（内置+外挂+同目录可加载），必须可滚动。
 Future<void> _showPlayerSheet(
   BuildContext context,
@@ -30,7 +25,7 @@ Future<void> _showPlayerSheet(
   final maxHeight = MediaQuery.sizeOf(context).height * 0.72;
   return showModalBottomSheet<void>(
     context: context,
-    backgroundColor: dark ? const Color(0xFF1C1B1F) : null,
+    backgroundColor: dark ? AppPalette.darkSurface : null,
     constraints: BoxConstraints(maxHeight: maxHeight),
     builder: (sheetContext) {
       // Builder 保证面板内容拿到的是 _panelTheme 之后（内部）的 context；
@@ -185,7 +180,7 @@ Widget _speedRow(
   );
 }
 
-Future<void> showAudioTrackPanel(BuildContext context, PlaybackController playback, {bool dark = true}) {
+Future<void> showAudioTrackPanel(BuildContext context, PlaybackController playback, {bool dark = false}) {
   return _showPlayerSheet(context, dark, builder: (sheetContext) {
     return ListView(
       shrinkWrap: true,
@@ -221,7 +216,7 @@ Future<void> showAudioTrackPanel(BuildContext context, PlaybackController playba
   });
 }
 
-Future<void> showSubtitlePanel(BuildContext context, PlaybackController playback, {bool dark = true}) {
+Future<void> showSubtitlePanel(BuildContext context, PlaybackController playback, {bool dark = false}) {
   final cur = playback.currentSubtitle;
   return _showPlayerSheet(context, dark, builder: (sheetContext) {
     return ListView(

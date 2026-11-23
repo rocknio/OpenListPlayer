@@ -14,7 +14,9 @@ import 'package:wakelock_plus/wakelock_plus.dart';
 import '../../core/models.dart';
 import '../../player/playback_controller.dart';
 import '../../providers.dart';
+import '../app_theme.dart';
 import '../widgets.dart';
+import 'audio_theme.dart';
 import 'panels.dart';
 
 /// 左右各让出的边缘宽度：水平拖动 seek 不在此区域起手，保留给 iOS 系统返回手势
@@ -126,13 +128,13 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
         final item = playback.current;
         if (item == null) {
           return Scaffold(
-            backgroundColor: Colors.black,
+            backgroundColor: AudioTone.bg,
             appBar: AppBar(title: const Text('播放'), backgroundColor: Colors.transparent),
-            body: const Center(child: Text('没有正在播放的内容', style: TextStyle(color: Colors.white54))),
+            body: const Center(child: Text('没有正在播放的内容', style: TextStyle(color: AudioTone.muted))),
           );
         }
         return Scaffold(
-          backgroundColor: Colors.black,
+          backgroundColor: AudioTone.bg,
           body: OrientationBuilder(
             builder: (context, orientation) {
               final isLandscape = orientation == Orientation.landscape;
@@ -156,53 +158,50 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
         children: [
           _videoArea(playback, fullscreen: false),
           Expanded(
-            // 播放页底色固定黑，浅色模式下若沿用应用主题会得到深色文字 → 黑底黑字。
-            // 信息区与队列强制深色主题。
-            child: Theme(
-              data: ThemeData.dark(useMaterial3: true),
-              child: ListView(
-                padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
-                children: [
-                  Text(
-                    playback.current?.name ?? '',
-                    style: Theme.of(context)
-                        .textTheme
-                        .titleMedium
-                        ?.copyWith(fontWeight: FontWeight.w600, color: Colors.white),
+            // 信息区与队列沿用全局米白陶土主题，与音频播放页一致。
+            child: ListView(
+              padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
+              children: [
+                Text(
+                  playback.current?.name ?? '',
+                  style: const TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.w600,
+                    color: AudioTone.ink,
                   ),
-                  const SizedBox(height: 4),
-                  Text(
-                    '${playback.current?.isVideo == true ? '视频' : '音频'} · ${playback.current?.parent ?? ''}',
-                    style: const TextStyle(color: Colors.white60, fontSize: 12),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                  const SizedBox(height: 12),
-                  Text('播放队列 (${playback.queue.length})',
-                      style: const TextStyle(color: Colors.white70, fontSize: 13, fontWeight: FontWeight.w600)),
-                  const SizedBox(height: 4),
-                  for (var i = 0; i < playback.queue.length; i++)
-                    ListTile(
-                      dense: true,
-                      contentPadding: EdgeInsets.zero,
-                      selected: i == playback.index,
-                      selectedTileColor: Colors.white.withValues(alpha: 0.12),
-                      leading: Icon(
-                        playback.queue[i].isVideo ? Icons.movie_outlined : Icons.music_note_outlined,
-                        size: 20,
-                        color: i == playback.index ? Colors.white : Colors.white60,
-                      ),
-                      title: Text(playback.queue[i].name,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: TextStyle(
-                            fontSize: 13,
-                            color: i == playback.index ? Colors.white : Colors.white70,
-                          )),
-                      onTap: () => playback.jumpTo(i),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  '${playback.current?.isVideo == true ? '视频' : '音频'} · ${playback.current?.parent ?? ''}',
+                  style: const TextStyle(color: AudioTone.muted, fontSize: 12),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+                const SizedBox(height: 12),
+                Text('播放队列 (${playback.queue.length})',
+                    style: const TextStyle(color: AudioTone.muted, fontSize: 13, fontWeight: FontWeight.w600)),
+                const SizedBox(height: 4),
+                for (var i = 0; i < playback.queue.length; i++)
+                  ListTile(
+                    dense: true,
+                    contentPadding: EdgeInsets.zero,
+                    selected: i == playback.index,
+                    selectedTileColor: AudioTone.sand,
+                    leading: Icon(
+                      playback.queue[i].isVideo ? Icons.movie_outlined : Icons.music_note_outlined,
+                      size: 20,
+                      color: i == playback.index ? AudioTone.accent : AudioTone.muted,
                     ),
-                ],
-              ),
+                    title: Text(playback.queue[i].name,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontSize: 13,
+                          color: i == playback.index ? AudioTone.accent : AudioTone.ink,
+                        )),
+                    onTap: () => playback.jumpTo(i),
+                  ),
+              ],
             ),
           ),
         ],
@@ -283,20 +282,20 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
       child: Center(
         child: Container(
           padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
-          decoration: BoxDecoration(color: Colors.black.withValues(alpha: 0.66), borderRadius: BorderRadius.circular(12)),
+          decoration: BoxDecoration(color: AppPalette.scrimStrong, borderRadius: BorderRadius.circular(12)),
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Icon(secs > 0 ? Icons.fast_forward : Icons.fast_rewind, color: Colors.white),
+              Icon(secs > 0 ? Icons.fast_forward : Icons.fast_rewind, color: AppPalette.darkInk),
               const SizedBox(width: 10),
               Text(
                 formatDuration(target),
-                style: const TextStyle(color: Colors.white, fontSize: 18, fontFeatures: [FontFeature.tabularFigures()]),
+                style: const TextStyle(color: AppPalette.darkInk, fontSize: 18, fontFeatures: [FontFeature.tabularFigures()]),
               ),
               const SizedBox(width: 10),
               Text(
                 '${secs > 0 ? '+' : ''}$secs 秒',
-                style: const TextStyle(color: Colors.white70, fontSize: 13),
+                style: const TextStyle(color: AppPalette.darkMuted, fontSize: 13),
               ),
             ],
           ),
@@ -310,7 +309,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
       decoration: BoxDecoration(
-        color: Colors.black.withValues(alpha: 0.66),
+        color: AppPalette.scrimStrong,
         borderRadius: BorderRadius.circular(14),
       ),
       child: Column(
@@ -319,12 +318,12 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
           const SizedBox(
             width: 32,
             height: 32,
-            child: CircularProgressIndicator(color: Colors.white, strokeWidth: 3),
+            child: CircularProgressIndicator(color: AppPalette.darkAccent, strokeWidth: 3),
           ),
           const SizedBox(height: 10),
           Text(
             progress == null ? label : '$label ${(progress * 100).clamp(0, 100).toStringAsFixed(0)}%',
-            style: const TextStyle(color: Colors.white, fontSize: 13),
+            style: const TextStyle(color: AppPalette.darkInk, fontSize: 13),
           ),
         ],
       ),
@@ -379,14 +378,14 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
                     gradient: LinearGradient(
                       begin: Alignment.topCenter,
                       end: Alignment.bottomCenter,
-                      colors: [Colors.black54, Colors.transparent],
+                      colors: [AppPalette.scrim, Colors.transparent],
                     ),
                   ),
                   child: Row(
                     children: [
                       IconButton(
                         tooltip: '返回',
-                        icon: const Icon(Icons.arrow_back, color: Colors.white),
+                        icon: const Icon(Icons.arrow_back, color: AppPalette.darkInk),
                         onPressed: () async {
                           final navigator = Navigator.of(context);
                           if (fullscreen) {
@@ -400,19 +399,19 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
                           playback.current?.name ?? '',
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(color: Colors.white, fontSize: 14),
+                          style: const TextStyle(color: AppPalette.darkInk, fontSize: 14),
                         ),
                       ),
                       if (!fullscreen)
                         IconButton(
                           tooltip: '全屏',
-                          icon: const Icon(Icons.fullscreen, color: Colors.white),
+                          icon: const Icon(Icons.fullscreen, color: AppPalette.darkInk),
                           onPressed: _enterFullscreen,
                         )
                       else
                         IconButton(
                           tooltip: '退出全屏',
-                          icon: const Icon(Icons.fullscreen_exit, color: Colors.white),
+                          icon: const Icon(Icons.fullscreen_exit, color: AppPalette.darkInk),
                           onPressed: _exitFullscreen,
                         ),
                     ],
@@ -430,7 +429,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
                       gradient: LinearGradient(
                         begin: Alignment.bottomCenter,
                         end: Alignment.topCenter,
-                        colors: [Colors.black54, Colors.transparent],
+                        colors: [AppPalette.scrim, Colors.transparent],
                       ),
                     ),
                     child: _bottomControls(playback, compact: compact || !fullscreen),
@@ -448,20 +447,20 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
       margin: EdgeInsets.symmetric(horizontal: 24, vertical: compact ? 0 : 8),
       padding: EdgeInsets.symmetric(horizontal: compact ? 16 : 20, vertical: compact ? 10 : 16),
       decoration: BoxDecoration(
-        color: Colors.black.withValues(alpha: 0.72),
+        color: AppPalette.scrimStrong,
         borderRadius: BorderRadius.circular(14),
       ),
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(Icons.wifi_off, color: Colors.white70, size: compact ? 28 : 40),
+          Icon(Icons.wifi_off, color: AppPalette.darkMuted, size: compact ? 28 : 40),
           SizedBox(height: compact ? 6 : 8),
           Text(
             playback.errorText ?? '播放失败',
             textAlign: TextAlign.center,
             maxLines: compact ? 2 : 3,
             overflow: TextOverflow.ellipsis,
-            style: TextStyle(color: Colors.white, fontSize: compact ? 12 : 13),
+            style: TextStyle(color: AppPalette.darkInk, fontSize: compact ? 12 : 13),
           ),
           SizedBox(height: compact ? 8 : 12),
           Row(
@@ -480,11 +479,11 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
               ),
               const SizedBox(width: 12),
               OutlinedButton.icon(
-                icon: const Icon(Icons.skip_next, color: Colors.white),
-                label: const Text('跳过', style: TextStyle(color: Colors.white)),
+                icon: const Icon(Icons.skip_next, color: AppPalette.darkInk),
+                label: const Text('跳过', style: TextStyle(color: AppPalette.darkInk)),
                 style: OutlinedButton.styleFrom(
-                  side: const BorderSide(color: Colors.white54),
-                  foregroundColor: Colors.white,
+                  side: const BorderSide(color: AppPalette.darkTaupe),
+                  foregroundColor: AppPalette.darkInk,
                   visualDensity: compact ? VisualDensity.compact : null,
                   padding: compact ? const EdgeInsets.symmetric(horizontal: 14) : null,
                 ),
@@ -514,6 +513,10 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
                   return SliderTheme(
                     data: SliderThemeData(
                       trackHeight: 3,
+                      activeTrackColor: AppPalette.darkAccent,
+                      inactiveTrackColor: AppPalette.darkSandDeep,
+                      thumbColor: AppPalette.darkAccent,
+                      overlayColor: AppPalette.darkAccent.withValues(alpha: 0.16),
                       thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 7),
                       // overlay 参与 Slider 的高度计算，22 → 44pt 命中区（iOS 最小触控尺寸）
                       overlayShape: const RoundSliderOverlayShape(overlayRadius: 22),
@@ -531,7 +534,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
             ),
             Text(
               formatDuration(playback.player.state.duration),
-              style: const TextStyle(color: Colors.white70, fontSize: 12),
+              style: const TextStyle(color: AppPalette.darkMuted, fontSize: 12),
             ),
           ],
         ),
@@ -545,13 +548,13 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
     final primary = <Widget>[
       IconButton(
         tooltip: '上一个',
-        icon: const Icon(Icons.skip_previous, color: Colors.white),
+        icon: const Icon(Icons.skip_previous, color: AppPalette.darkInk),
         onPressed: () => playback.previous(),
       ),
       _playPause(playback),
       IconButton(
         tooltip: '下一个',
-        icon: const Icon(Icons.skip_next, color: Colors.white),
+        icon: const Icon(Icons.skip_next, color: AppPalette.darkInk),
         onPressed: () => playback.next(),
       ),
     ];
@@ -589,7 +592,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
       stream: playback.player.stream.position,
       builder: (context, snap) => Text(
         formatDuration(snap.data ?? Duration.zero),
-        style: const TextStyle(color: Colors.white70, fontSize: 12),
+        style: const TextStyle(color: AppPalette.darkMuted, fontSize: 12),
       ),
     );
   }
@@ -602,7 +605,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
         return IconButton(
           tooltip: playing ? '暂停' : '播放',
           iconSize: 36,
-          icon: Icon(playing ? Icons.pause : Icons.play_arrow, color: Colors.white),
+          icon: Icon(playing ? Icons.pause : Icons.play_arrow, color: AppPalette.darkAccent),
           onPressed: () => playback.togglePlay(),
         );
       },
@@ -611,10 +614,10 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
 
   Widget _speedButton(PlaybackController playback) {
     return TextButton(
-      onPressed: () => showSpeedPanel(context, playback, dark: true),
+      onPressed: () => showSpeedPanel(context, playback),
       child: Text(
         formatSpeed(playback.speed),
-        style: const TextStyle(color: Colors.white, fontSize: 13),
+        style: const TextStyle(color: AppPalette.darkAccent, fontSize: 13),
       ),
     );
   }
@@ -624,7 +627,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
       tooltip: '字幕',
       icon: Icon(
         playback.currentSubtitle != null ? Icons.subtitles : Icons.subtitles_outlined,
-        color: Colors.white,
+        color: AppPalette.darkInk,
       ),
       onPressed: () => showSubtitlePanel(context, playback),
     );
@@ -635,7 +638,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
       tooltip: '音轨',
       icon: Icon(
         playback.audioTracks.length > 1 ? Icons.graphic_eq : Icons.graphic_eq_outlined,
-        color: Colors.white,
+        color: AppPalette.darkInk,
       ),
       onPressed: playback.audioTracks.length > 1 ? () => showAudioTrackPanel(context, playback) : null,
     );
@@ -649,7 +652,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
     };
     return IconButton(
       tooltip: tip,
-      icon: Icon(icon, color: Colors.white),
+      icon: Icon(icon, color: AppPalette.darkInk),
       onPressed: () => playback.cycleMode(),
     );
   }

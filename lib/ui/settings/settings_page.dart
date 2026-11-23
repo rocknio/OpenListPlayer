@@ -120,7 +120,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                           overflow: TextOverflow.ellipsis,
                           style: TextStyle(
                             color: _testResult!.startsWith('连接成功')
-                                ? Colors.green
+                                ? Theme.of(context).colorScheme.primary
                                 : Theme.of(context).colorScheme.error,
                           ),
                         ),

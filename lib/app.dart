@@ -6,6 +6,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'providers.dart';
+import 'ui/app_theme.dart';
 import 'ui/browser/browser_page.dart';
 import 'ui/home/home_page.dart';
 import 'ui/mini_player_bar.dart';
@@ -57,17 +58,9 @@ class _AppState extends ConsumerState<App> with WidgetsBindingObserver {
     return MaterialApp(
       title: 'OpenListPlayer',
       debugShowCheckedModeBanner: false,
-      theme: ThemeData(
-        colorSchemeSeed: const Color(0xFF3F51B5),
-        brightness: Brightness.light,
-        useMaterial3: true,
-      ),
-      darkTheme: ThemeData(
-        colorSchemeSeed: const Color(0xFF3F51B5),
-        brightness: Brightness.dark,
-        useMaterial3: true,
-      ),
-      themeMode: ThemeMode.system, // 深色跟随系统
+      theme: AppTheme.light,
+      darkTheme: AppTheme.dark,
+      themeMode: ThemeMode.light, // 全 App 统一为音频页的米白浅色色板
       home: const AppShell(),
     );
   }
