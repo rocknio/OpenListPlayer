@@ -1,17 +1,18 @@
-/// 首页：继续播放卡片 + 最近播放。
+/// 首页：继续播放卡片 + 播单列表。
 library;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import '../../core/models.dart';
 import '../../data/app_database.dart';
 import '../../player/playback_controller.dart';
 import '../../providers.dart';
-import '../tab_index.dart';
-import '../widgets.dart';
 import '../player/audio_page.dart';
 import '../player/player_screen.dart';
+import '../playlist/current_queue_page.dart';
+import '../playlist/playlist_detail_page.dart';
+import '../tab_index.dart';
+import '../widgets.dart';
 
 class HomePage extends ConsumerWidget {
   const HomePage({super.key});
@@ -35,29 +36,31 @@ class HomePage extends ConsumerWidget {
         children: [
           const _ResumeCard(),
           const SizedBox(height: 16),
-          Text('最近播放', style: Theme.of(context).textTheme.titleMedium),
+          Text('播单', style: Theme.of(context).textTheme.titleMedium),
           const SizedBox(height: 8),
-          StreamBuilder<List<PlayHistory>>(
-            stream: db.historyStream(),
+          const CurrentPlaylistTile(),
+          const Divider(height: 1),
+          StreamBuilder<List<Playlist>>(
+            stream: db.playlistsStream(),
             builder: (context, snap) {
               final list = snap.data ?? [];
               if (list.isEmpty) {
                 return const Padding(
                   padding: EdgeInsets.symmetric(vertical: 24),
-                  child: Center(child: Text('暂无播放记录，去"文件"页选一个吧')),
+                  child: Center(child: Text('还没有播单，去"播单"tab 新建一个吧')),
                 );
               }
               return Column(
                 children: [
-                  for (final h in list)
+                  for (final p in list)
                     ListTile(
                       contentPadding: EdgeInsets.zero,
-                      leading: Icon(h.isVideo ? Icons.movie_outlined : Icons.music_note_outlined),
-                      title: Text(h.name, maxLines: 1, overflow: TextOverflow.ellipsis),
-                      // 进度合并进 subtitle：大字号下 trailing 文本会占满整行并触发
-                      // ListTile "Trailing widget consumes the entire tile width" 断言。
-                      subtitle: _HistorySubtitle(playedAt: h.playedAt, path: h.path),
-                      onTap: () => _openFromHistory(context, ref, h),
+                      leading: const Icon(Icons.playlist_play),
+                      title: Text(p.name, maxLines: 1, overflow: TextOverflow.ellipsis),
+                      subtitle: Text(_fmtDate(p.createdAt)),
+                      onTap: () => Navigator.of(context).push(MaterialPageRoute<void>(
+                        builder: (_) => PlaylistDetailPage(playlistId: p.id, playlistName: p.name),
+                      )),
                     ),
                 ],
               );
@@ -68,24 +71,8 @@ class HomePage extends ConsumerWidget {
     );
   }
 
-  Future<void> _openFromHistory(BuildContext context, WidgetRef ref, PlayHistory h) async {
-    final playback = ref.read(playbackProvider);
-    final api = ref.read(apiProvider);
-    final item = QueueItem(path: h.path, name: h.name, isVideo: h.isVideo);
-    final parent = item.parent;
-    try {
-      final entries = await api.listDir(parent);
-      await playback.playFromDirectory(parent, entries, h.name);
-      if (!context.mounted) return;
-      Navigator.of(context).push(MaterialPageRoute<void>(
-        builder: (_) => h.isVideo ? const PlayerScreen() : const AudioPage(),
-      ));
-    } catch (e) {
-      if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('打开失败: $e')));
-      }
-    }
-  }
+  String _fmtDate(DateTime d) =>
+      '${d.year}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')} 创建';
 }
 
 /// 继续播放卡片：恢复上次会话（队列 + 文件 + 位置）
@@ -139,56 +126,4 @@ class _ResumeCard extends ConsumerWidget {
       ),
     );
   }
-}
-
-/// 历史条目上的进度角标（有未看完进度时显示）
-class _HistoryProgress extends ConsumerWidget {
-  const _HistoryProgress({required this.path});
-  final String path;
-
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final db = ref.watch(dbProvider);
-    return StreamBuilder<PlayProgress?>(
-      stream: db.progressStream(path),
-      builder: (context, snap) {
-        final p = snap.data;
-        if (p == null) return const SizedBox.shrink();
-        final pos = Duration(milliseconds: p.positionMs);
-        final dur = Duration(milliseconds: p.durationMs);
-        if (dur == Duration.zero) return const SizedBox.shrink();
-        return Text('看到 ${formatDuration(pos)} / ${formatDuration(dur)}',
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: Theme.of(context).textTheme.bodySmall);
-      },
-    );
-  }
-}
-
-/// 副标题：相对时间 + 播放进度（同一行，超长省略）
-class _HistorySubtitle extends StatelessWidget {
-  const _HistorySubtitle({required this.playedAt, required this.path});
-  final DateTime playedAt;
-  final String path;
-
-  @override
-  Widget build(BuildContext context) {
-    return Row(
-      children: [
-        Text(relTime(playedAt)),
-        const SizedBox(width: 8),
-        Flexible(child: _HistoryProgress(path: path)),
-      ],
-    );
-  }
-}
-
-String relTime(DateTime t) {
-  final diff = DateTime.now().difference(t);
-  if (diff.inMinutes < 1) return '刚刚';
-  if (diff.inHours < 1) return '${diff.inMinutes} 分钟前';
-  if (diff.inDays < 1) return '${diff.inHours} 小时前';
-  if (diff.inDays < 30) return '${diff.inDays} 天前';
-  return '${t.year}-${t.month.toString().padLeft(2, '0')}-${t.day.toString().padLeft(2, '0')}';
 }

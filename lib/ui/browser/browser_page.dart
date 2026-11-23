@@ -16,7 +16,11 @@ import '../widgets.dart';
 import 'add_to_playlist_sheet.dart';
 
 class BrowserPage extends ConsumerStatefulWidget {
-  const BrowserPage({super.key});
+  const BrowserPage({super.key, this.targetPlaylistId});
+
+  /// 非空时为"添加文件到指定播单"模式：点按媒体即选中，确认后直接写入该播单并返回。
+  /// 为空时是底部 tab 的普通文件页：长按多选，经底部弹层选择目标播单。
+  final int? targetPlaylistId;
 
   @override
   ConsumerState<BrowserPage> createState() => _BrowserPageState();
@@ -28,9 +32,26 @@ class _BrowserPageState extends ConsumerState<BrowserPage> {
   bool _loading = false;
   String? _error;
 
-  /// 多选模式：选中的媒体文件（完整路径）
-  final Set<String> _selected = <String>{};
+  bool get _pickMode => widget.targetPlaylistId != null;
+
+  /// 选中的媒体文件：key 为完整路径，value 携带写入播单所需的全部信息。
+  /// 普通模式切换目录时清空；选择模式跨目录保留，可一次添加多个目录的文件。
+  final Map<String, QueueItem> _selected = <String, QueueItem>{};
   bool get _selecting => _selected.isNotEmpty;
+
+  /// 当前目录可用于加播单的媒体条目
+  List<FsEntry> get _selectable =>
+      _entries.where((e) => !e.isDirectory && isMediaFile(e.name)).toList();
+
+  String _pathOf(FsEntry e) => joinPath(_path, e.name);
+
+  QueueItem _itemOf(FsEntry e) => QueueItem(
+        path: _pathOf(e),
+        name: e.name,
+        isVideo: isVideoFile(e.name),
+        size: e.size,
+        thumb: e.thumb,
+      );
 
   @override
   void initState() {
@@ -46,7 +67,8 @@ class _BrowserPageState extends ConsumerState<BrowserPage> {
       if (path != null) {
         _path = path;
         _entries = [];
-        _selected.clear();
+        // 选择模式保留跨目录的已选项；普通模式沿用"切目录即清空"的原行为
+        if (!_pickMode) _selected.clear();
       }
     });
     try {
@@ -82,29 +104,51 @@ class _BrowserPageState extends ConsumerState<BrowserPage> {
   }
 
   void _longPressMedia(FsEntry file) {
-    setState(() => _selected.add(joinPath(_path, file.name)));
+    setState(() => _selected[_pathOf(file)] = _itemOf(file));
   }
 
   void _toggleSelect(FsEntry file) {
     setState(() {
-      final p = joinPath(_path, file.name);
-      _selected.contains(p) ? _selected.remove(p) : _selected.add(p);
-      if (_selected.isEmpty) Navigator.of(context).maybePop(); // 退出多选 appbar
+      final p = _pathOf(file);
+      _selected.containsKey(p) ? _selected.remove(p) : _selected[p] = _itemOf(file);
+      if (_selected.isEmpty && !_pickMode) Navigator.of(context).maybePop(); // 退出多选 appbar
+    });
+  }
+
+  /// 全选当前目录的媒体文件（目录与非媒体不参与）
+  void _selectAll() {
+    setState(() {
+      for (final e in _selectable) {
+        _selected[_pathOf(e)] = _itemOf(e);
+      }
+    });
+  }
+
+  /// 清空所有已选项（含跨目录）
+  void _selectNone() {
+    setState(() => _selected.clear());
+  }
+
+  /// 反选当前目录的媒体文件
+  void _invertSelection() {
+    setState(() {
+      for (final e in _selectable) {
+        final p = _pathOf(e);
+        _selected.containsKey(p) ? _selected.remove(p) : _selected[p] = _itemOf(e);
+      }
     });
   }
 
   Future<void> _addSelectedToPlaylist() async {
-    final items = _entries
-        .where((e) => !e.isDirectory && _selected.contains(joinPath(_path, e.name)))
-        .map((e) => QueueItem(
-              path: joinPath(_path, e.name),
-              name: e.name,
-              isVideo: isVideoFile(e.name),
-              size: e.size,
-              thumb: e.thumb,
-            ))
-        .toList();
+    final items = _selected.values.toList();
+    if (items.isEmpty) return;
     final db = ref.read(dbProvider);
+    if (_pickMode) {
+      // 选择模式：直接写入目标播单，返回 true 由播单详情页给出提示
+      await db.addItemsToPlaylist(widget.targetPlaylistId!, items);
+      if (mounted) Navigator.of(context).pop(true);
+      return;
+    }
     final added = await showAddToPlaylistSheet(context, db, items);
     if (added && mounted) {
       setState(() => _selected.clear());
@@ -124,14 +168,15 @@ class _BrowserPageState extends ConsumerState<BrowserPage> {
     final hasSite = ref.watch(hasSiteProvider);
     if (!hasSite) {
       return Scaffold(
-        appBar: AppBar(title: const Text('文件')),
+        appBar: AppBar(title: Text(_pickMode ? '添加文件到播单' : '文件')),
         body: NoSiteHint(onGoSettings: () => _goSettings()),
       );
     }
     return PopScope(
-      canPop: false,
+      // 选择模式是 push 进来的页面，交给默认返回逻辑回到播单详情页
+      canPop: _pickMode,
       onPopInvokedWithResult: (didPop, _) {
-        if (didPop) return;
+        if (didPop || _pickMode) return;
         if (_selecting) {
           setState(() => _selected.clear());
           return;
@@ -156,12 +201,45 @@ class _BrowserPageState extends ConsumerState<BrowserPage> {
     ref.read(tabIndexProvider.notifier).set(3);
   }
 
+  /// 全选 / 反选 / 全不选快捷操作，普通多选态与选择模式共用
+  List<Widget> get _bulkActions => [
+        IconButton(
+          icon: const Icon(Icons.select_all),
+          tooltip: '全选当前目录',
+          onPressed: _selectable.isEmpty ? null : _selectAll,
+        ),
+        IconButton(
+          icon: const Icon(Icons.swap_horiz),
+          tooltip: '反选当前目录',
+          onPressed: _selectable.isEmpty ? null : _invertSelection,
+        ),
+        if (_selecting)
+          IconButton(
+            icon: const Icon(Icons.deselect),
+            tooltip: '全不选',
+            onPressed: _selectNone,
+          ),
+      ];
+
   PreferredSizeWidget _normalAppBar() {
     return AppBar(
-      title: Text(_path == '/' ? '文件' : _path.split('/').last),
-      leading: _path == '/'
-          ? null
-          : IconButton(icon: const Icon(Icons.arrow_back), onPressed: () => _backTo(_parentOf(_path))),
+      title: Text(_pickMode
+          ? '添加文件到播单'
+          : (_path == '/' ? '文件' : _path.split('/').last)),
+      leading: _pickMode
+          ? IconButton(
+              icon: const Icon(Icons.close),
+              tooltip: '取消添加',
+              onPressed: () => Navigator.of(context).pop(),
+            )
+          : (_path == '/'
+              ? null
+              : IconButton(
+                  icon: const Icon(Icons.arrow_back),
+                  onPressed: () => _backTo(_parentOf(_path)),
+                )),
+      // 选择模式一进页面即可用全选，无需先手动点选一个文件
+      actions: _pickMode ? _bulkActions : null,
       bottom: PreferredSize(
         preferredSize: const Size.fromHeight(34),
         child: Align(alignment: Alignment.centerLeft, child: _breadcrumb()),
@@ -170,10 +248,21 @@ class _BrowserPageState extends ConsumerState<BrowserPage> {
   }
 
   PreferredSizeWidget _selectionAppBar() {
+    final cs = Theme.of(context).colorScheme;
     return AppBar(
-      leading: IconButton(icon: const Icon(Icons.close), onPressed: () => setState(() => _selected.clear())),
+      leading: IconButton(
+        icon: const Icon(Icons.close),
+        onPressed: () {
+          if (_pickMode) {
+            Navigator.of(context).pop();
+          } else {
+            setState(() => _selected.clear());
+          }
+        },
+      ),
       title: Text('已选 ${_selected.length} 项'),
-      backgroundColor: Theme.of(context).colorScheme.secondaryContainer,
+      backgroundColor: cs.secondaryContainer,
+      actions: _bulkActions,
     );
   }
 
@@ -185,7 +274,9 @@ class _BrowserPageState extends ConsumerState<BrowserPage> {
           width: double.infinity,
           child: FilledButton.icon(
             icon: const Icon(Icons.playlist_add),
-            label: Text('添加到播单 (${_selected.length})'),
+            label: Text(_pickMode
+                ? '确认添加到播单 (${_selected.length})'
+                : '添加到播单 (${_selected.length})'),
             onPressed: _selected.isEmpty ? null : _addSelectedToPlaylist,
           ),
         ),
@@ -267,8 +358,8 @@ class _BrowserPageState extends ConsumerState<BrowserPage> {
   }
 
   Widget _tile(FsEntry e) {
-    final path = joinPath(_path, e.name);
-    final selected = _selected.contains(path);
+    final path = _pathOf(e);
+    final selected = _selected.containsKey(path);
     final media = !e.isDirectory && isMediaFile(e.name);
     final sub = e.isDirectory ? '' : formatFileSize(e.size);
 
@@ -302,6 +393,11 @@ class _BrowserPageState extends ConsumerState<BrowserPage> {
       enabled: e.isDirectory || media,
       onLongPress: media ? () => _longPressMedia(e) : null,
       onTap: () {
+        // 选择模式下点按媒体即选中（目录照常进入，便于跨目录累积）
+        if (_pickMode && media) {
+          _toggleSelect(e);
+          return;
+        }
         if (_selecting) {
           if (media) _toggleSelect(e);
           return;

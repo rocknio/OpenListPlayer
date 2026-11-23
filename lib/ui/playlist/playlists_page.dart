@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../data/app_database.dart';
 import '../../providers.dart';
+import 'current_queue_page.dart';
 import 'playlist_detail_page.dart';
 
 class PlaylistsPage extends ConsumerWidget {
@@ -21,39 +22,47 @@ class PlaylistsPage extends ConsumerWidget {
         label: const Text('新建播单'),
         onPressed: () => _create(context, db),
       ),
-      body: StreamBuilder<List<Playlist>>(
-        stream: db.playlistsStream(),
-        builder: (context, snap) {
-          final list = snap.data ?? [];
-          if (list.isEmpty) {
-            return const Center(
-              child: Text('还没有播单\n在"文件"页长按文件即可添加', textAlign: TextAlign.center),
-            );
-          }
-          return ListView(
-            children: [
-              for (final p in list)
-                ListTile(
-                  leading: const Icon(Icons.playlist_play),
-                  title: Text(p.name),
-                  subtitle: Text(_fmtDate(p.createdAt)),
-                  trailing: PopupMenuButton<String>(
-                    onSelected: (action) {
-                      if (action == 'rename') _rename(context, db, p);
-                      if (action == 'delete') _delete(context, db, p);
-                    },
-                    itemBuilder: (_) => const [
-                      PopupMenuItem(value: 'rename', child: Text('重命名')),
-                      PopupMenuItem(value: 'delete', child: Text('删除播单')),
-                    ],
-                  ),
-                  onTap: () => Navigator.of(context).push(MaterialPageRoute<void>(
-                    builder: (_) => PlaylistDetailPage(playlistId: p.id, playlistName: p.name),
-                  )),
-                ),
-            ],
-          );
-        },
+      body: Column(
+        children: [
+          const CurrentPlaylistTile(),
+          const Divider(height: 1),
+          Expanded(
+            child: StreamBuilder<List<Playlist>>(
+              stream: db.playlistsStream(),
+              builder: (context, snap) {
+                final list = snap.data ?? [];
+                if (list.isEmpty) {
+                  return const Center(
+                    child: Text('还没有播单\n点右下角新建，进入播单后可添加文件', textAlign: TextAlign.center),
+                  );
+                }
+                return ListView(
+                  children: [
+                    for (final p in list)
+                      ListTile(
+                        leading: const Icon(Icons.playlist_play),
+                        title: Text(p.name),
+                        subtitle: Text(_fmtDate(p.createdAt)),
+                        trailing: PopupMenuButton<String>(
+                          onSelected: (action) {
+                            if (action == 'rename') _rename(context, db, p);
+                            if (action == 'delete') _delete(context, db, p);
+                          },
+                          itemBuilder: (_) => const [
+                            PopupMenuItem(value: 'rename', child: Text('重命名')),
+                            PopupMenuItem(value: 'delete', child: Text('删除播单')),
+                          ],
+                        ),
+                        onTap: () => Navigator.of(context).push(MaterialPageRoute<void>(
+                          builder: (_) => PlaylistDetailPage(playlistId: p.id, playlistName: p.name),
+                        )),
+                      ),
+                  ],
+                );
+              },
+            ),
+          ),
+        ],
       ),
     );
   }

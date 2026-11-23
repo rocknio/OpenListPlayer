@@ -6,8 +6,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/models.dart';
 import '../../data/app_database.dart';
-import '../../player/playback_controller.dart';
 import '../../providers.dart';
+import '../browser/browser_page.dart';
 import '../player/audio_page.dart';
 import '../player/player_screen.dart';
 import '../widgets.dart';
@@ -35,29 +35,72 @@ class _PlaylistDetailPageState extends ConsumerState<PlaylistDetailPage> {
     ));
   }
 
+  /// 进入文件浏览器为本播单挑选文件
+  Future<void> _addFiles() async {
+    final added = await Navigator.of(context).push<bool>(MaterialPageRoute<bool>(
+      builder: (_) => BrowserPage(targetPlaylistId: widget.playlistId),
+    ));
+    if (added == true && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('已添加文件到播单')),
+      );
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final db = ref.watch(dbProvider);
     return Scaffold(
-      appBar: AppBar(title: Text(widget.playlistName)),
+      appBar: AppBar(
+        title: Text(widget.playlistName),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.add),
+            tooltip: '添加文件',
+            onPressed: _addFiles,
+          ),
+        ],
+      ),
       body: StreamBuilder<List<PlaylistItem>>(
         stream: db.playlistItemsStream(widget.playlistId),
         builder: (context, snap) {
           final items = snap.data ?? [];
           if (items.isEmpty) {
-            return const Center(child: Text('播单为空'));
+            return Center(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Text('播单为空'),
+                  const SizedBox(height: 12),
+                  FilledButton.icon(
+                    icon: const Icon(Icons.add),
+                    label: const Text('添加文件'),
+                    onPressed: _addFiles,
+                  ),
+                ],
+              ),
+            );
           }
           return Column(
             children: [
               Padding(
                 padding: const EdgeInsets.all(12),
-                child: SizedBox(
-                  width: double.infinity,
-                  child: FilledButton.icon(
-                    icon: const Icon(Icons.play_arrow),
-                    label: Text('播放全部 (${items.length})'),
-                    onPressed: () => _play(items, 0),
-                  ),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: FilledButton.icon(
+                        icon: const Icon(Icons.play_arrow),
+                        label: Text('播放全部 (${items.length})'),
+                        onPressed: () => _play(items, 0),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    OutlinedButton.icon(
+                      icon: const Icon(Icons.add),
+                      label: const Text('添加文件'),
+                      onPressed: _addFiles,
+                    ),
+                  ],
                 ),
               ),
               Expanded(

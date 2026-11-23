@@ -86,6 +86,8 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
     _hideTimer?.cancel();
     _playback?.removeListener(_onPlaybackChanged);
     WakelockPlus.disable();
+    // 若用户横屏全屏状态下直接返回/被弹出，确保恢复竖屏锁，避免后续页面卡在横向
+    SystemChrome.setPreferredOrientations([DeviceOrientation.portraitUp]);
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
     super.dispose();
   }
@@ -113,7 +115,8 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
   }
 
   Future<void> _exitFullscreen() async {
-    await SystemChrome.setPreferredOrientations(DeviceOrientation.values);
+    // 退出全屏即回到全 App 的竖屏锁定，不让其它页面跟着转横
+    await SystemChrome.setPreferredOrientations([DeviceOrientation.portraitUp]);
     await SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
   }
 

@@ -3,6 +3,7 @@ library;
 
 import 'package:audio_service/audio_service.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:media_kit/media_kit.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -14,6 +15,8 @@ import 'providers.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  // 全 App 默认锁竖屏；仅视频播放页在全屏时临时切横屏，退出即恢复
+  await SystemChrome.setPreferredOrientations([DeviceOrientation.portraitUp]);
   debugPrint('[OLP] main: start');
   MediaKit.ensureInitialized();
   debugPrint('[OLP] main: mediakit ok');
