@@ -35,7 +35,6 @@ class HomePage extends ConsumerWidget {
         padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
         children: [
           const _ResumeCard(),
-          const SizedBox(height: 16),
           Text('播单', style: Theme.of(context).textTheme.titleMedium),
           const SizedBox(height: 8),
           const CurrentPlaylistTile(),
@@ -82,48 +81,61 @@ class _ResumeCard extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final playback = ref.watch(playbackProvider);
-    final item = playback.current;
-    // 只在未开播（会话恢复态）时显示；播放中由 mini 播放条承担入口
-    if (item == null || playback.status != PlaybackStatus.idle) return const SizedBox.shrink();
-    return Card(
-      margin: EdgeInsets.zero,
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                Icon(Icons.history, size: 18, color: Theme.of(context).colorScheme.primary),
-                const SizedBox(width: 6),
-                Text('继续播放', style: Theme.of(context).textTheme.titleMedium),
-              ],
-            ),
-            const SizedBox(height: 8),
-            Text(item.name, maxLines: 2, overflow: TextOverflow.ellipsis,
-                style: const TextStyle(fontWeight: FontWeight.w500)),
-            const SizedBox(height: 4),
-            Text('${item.isVideo ? '视频' : '音频'} · ${item.parent}',
-                maxLines: 1, overflow: TextOverflow.ellipsis,
-                style: Theme.of(context).textTheme.bodySmall),
-            const SizedBox(height: 12),
-            SizedBox(
-              width: double.infinity,
-              child: FilledButton.icon(
-                icon: const Icon(Icons.play_arrow),
-                label: const Text('继续播放'),
-                onPressed: () async {
-                  await playback.resumeSession();
-                  if (!context.mounted) return;
-                  Navigator.of(context).push(MaterialPageRoute<void>(
-                    builder: (_) => item.isVideo ? const PlayerScreen() : const AudioPage(),
-                  ));
-                },
+    return ListenableBuilder(
+      listenable: playback,
+      builder: (context, _) {
+        final item = playback.current;
+        // 只在未开播（会话恢复态）时显示；播放中由 mini 播放条承担入口
+        if (item == null || playback.status != PlaybackStatus.idle) {
+          return const SizedBox.shrink();
+        }
+        return Padding(
+          padding: const EdgeInsets.only(bottom: 16),
+          child: Card(
+            margin: EdgeInsets.zero,
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Icon(Icons.history, size: 18, color: Theme.of(context).colorScheme.primary),
+                      const SizedBox(width: 6),
+                      Text('继续播放', style: Theme.of(context).textTheme.titleMedium),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  Text(item.name,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(fontWeight: FontWeight.w500)),
+                  const SizedBox(height: 4),
+                  Text('${item.isVideo ? '视频' : '音频'} · ${item.parent}',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: Theme.of(context).textTheme.bodySmall),
+                  const SizedBox(height: 12),
+                  SizedBox(
+                    width: double.infinity,
+                    child: FilledButton.icon(
+                      icon: const Icon(Icons.play_arrow),
+                      label: const Text('继续播放'),
+                      onPressed: () async {
+                        await playback.resumeSession();
+                        if (!context.mounted) return;
+                        Navigator.of(context).push(MaterialPageRoute<void>(
+                          builder: (_) => item.isVideo ? const PlayerScreen() : const AudioPage(),
+                        ));
+                      },
+                    ),
+                  ),
+                ],
               ),
             ),
-          ],
-        ),
-      ),
+          ),
+        );
+      },
     );
   }
 }

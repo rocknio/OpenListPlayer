@@ -24,8 +24,21 @@ class OpenListClient {
   final SiteConfig site;
   final Dio _dio;
 
-  static String _normalizeBase(String url) =>
-      url.endsWith('/') ? url.substring(0, url.length - 1) : url;
+  static String _normalizeBase(String url) {
+    var s = url.trim();
+    while (s.endsWith('/')) {
+      s = s.substring(0, s.length - 1);
+    }
+    return s;
+  }
+
+  void close() => _dio.close();
+
+  void _ensureConfigured() {
+    if (_dio.options.baseUrl.isEmpty) {
+      throw const OpenListApiException('尚未配置有效的 OpenList 站点地址');
+    }
+  }
 
   Map<String, String> get _authHeaders => {
         if (site.token != null && site.token!.isNotEmpty) 'Authorization': site.token!,
@@ -33,9 +46,11 @@ class OpenListClient {
 
   /// 连接测试：/ping + 拉根目录。返回根目录条目数，失败抛异常。
   Future<int> testConnection() async {
+    _ensureConfigured();
     final pong = await _dio.get<String>('/ping');
     if (pong.statusCode != 200 || pong.data != 'pong') {
-      throw OpenListApiException('服务响应异常: ${pong.data}');
+      final snippet = (pong.data ?? '').length > 120 ? '${pong.data!.substring(0, 120)}...' : pong.data;
+      throw OpenListApiException('服务响应异常: $snippet');
     }
     final entries = await listDir('/');
     return entries.length;
@@ -44,11 +59,16 @@ class OpenListClient {
   /// 列目录。[refresh]=true 时让 OpenList 强制从驱动刷新（下拉刷新用）。
   /// guest 账户无刷新权限时自动降级为读缓存重试（静默降级，用户无感）。
   Future<List<FsEntry>> listDir(String path, {bool refresh = false}) async {
+    _ensureConfigured();
     try {
       return await _listDir(path, refresh: refresh);
     } on OpenListApiException catch (e) {
-      final isRefreshDenied = e.statusCode == 403 && e.message.toLowerCase().contains('refresh');
-      if (refresh && isRefreshDenied) {
+      if (refresh && e.statusCode == 403) {
+        return await _listDir(path, refresh: false);
+      }
+      rethrow;
+    } on DioException catch (e) {
+      if (refresh && e.response?.statusCode == 403) {
         return await _listDir(path, refresh: false);
       }
       rethrow;
@@ -76,24 +96,26 @@ class OpenListClient {
   }
 
   FsEntry _toEntry(Map<String, dynamic> e) => FsEntry(
-        name: e['name'] as String,
+        name: e['name']?.toString() ?? '',
         isDirectory: (e['is_dir'] as bool? ?? false) || (e['type'] == 1),
         size: (e['size'] as num?)?.toInt() ?? 0,
-        modified: DateTime.tryParse(e['modified'] as String? ?? ''),
-        thumb: e['thumb'] as String? ?? '',
+        modified: DateTime.tryParse(e['modified']?.toString() ?? ''),
+        thumb: e['thumb']?.toString() ?? '',
       );
 
   Map<String, dynamic> _unwrap(Map<String, dynamic>? body) {
     if (body == null) throw const OpenListApiException('空响应');
-    final code = body['code'] as int? ?? -1;
+    final code = (body['code'] as num?)?.toInt() ?? -1;
     if (code != 200) {
-      throw OpenListApiException(body['message'] as String? ?? '未知错误', statusCode: code);
+      throw OpenListApiException(body['message']?.toString() ?? '未知错误', statusCode: code);
     }
-    return body['data'] as Map<String, dynamic>? ?? {};
+    final data = body['data'];
+    return data is Map<String, dynamic> ? data : {};
   }
 
   /// 取文件直链信息（raw_url 可能带签名；header 为部分驱动要求的请求头）。
   Future<FileLink> getFileLink(String path) async {
+    _ensureConfigured();
     final resp = await _dio.post<Map<String, dynamic>>(
       '/api/fs/get',
       data: {'path': path, 'password': ''},
@@ -102,19 +124,33 @@ class OpenListClient {
     final body = _unwrap(resp.data);
     var rawUrl = body['raw_url'] as String? ?? '';
     if (rawUrl.isEmpty) {
-      // 兜底：走 OpenList 代理下载地址
+      // 兜底：走 OpenList 代理下载地址，按路径段逐段编码避免 # / ? / % 截断或损坏
       final sign = body['sign'] as String? ?? '';
-      rawUrl = '${_dio.options.baseUrl}/d${Uri.encodeFull(path)}${sign.isEmpty ? '' : '?sign=$sign'}';
+      final normalizedPath = path.startsWith('/') ? path : '/$path';
+      final encodedPath = normalizedPath.split('/').map(Uri.encodeComponent).join('/');
+      final query = sign.isEmpty ? '' : '?sign=${Uri.encodeQueryComponent(sign)}';
+      rawUrl = '${_dio.options.baseUrl}/d$encodedPath$query';
     }
     final headerRaw = body['header'];
     final headers = <String, String>{};
-    if (headerRaw is Map<String, dynamic>) {
-      headerRaw.forEach((k, v) => headers[k] = v.toString());
+    if (headerRaw is Map) {
+      headerRaw.forEach((k, v) {
+        final key = k.toString();
+        if (v is List) {
+          final parts = v.where((e) => e != null).map((e) => e.toString()).where((s) => s.isNotEmpty).toList();
+          if (parts.isNotEmpty) {
+            headers[key] = key.toLowerCase() == 'cookie' ? parts.join('; ') : parts.join(', ');
+          }
+        } else if (v != null) {
+          final s = v.toString();
+          if (s.isNotEmpty) headers[key] = s;
+        }
+      });
     }
     return FileLink(
       url: rawUrl,
       headers: headers,
-      name: body['name'] as String? ?? path.split('/').last,
+      name: body['name']?.toString() ?? path.split('/').last,
       size: (body['size'] as num?)?.toInt() ?? 0,
     );
   }

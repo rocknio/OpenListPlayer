@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/models.dart';
+import '../../player/playback_controller.dart';
 import '../../providers.dart';
 import '../player/audio_page.dart';
 import '../player/player_screen.dart';
@@ -100,8 +101,12 @@ class _CurrentQueuePageState extends ConsumerState<CurrentQueuePage> {
                   overflow: TextOverflow.ellipsis,
                 ),
                 onTap: () async {
-                  // 当前项不重开播放（避免从头播），非当前项跳转后打开播放页
-                  if (!isCurrent) await playback.jumpTo(i);
+                  // 非当前项跳转；恢复会话 idle 态下点当前项则触发续播开播，已开播则直接进播放页
+                  if (!isCurrent) {
+                    await playback.jumpTo(i);
+                  } else if (playback.status == PlaybackStatus.idle) {
+                    await playback.resumeSession();
+                  }
                   await _open(item);
                 },
               );

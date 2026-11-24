@@ -116,6 +116,7 @@ flutter:
 # media_kit_video 保持 2.x：1.2.5 的 SurfaceTexture 原生实现会覆盖引擎帧监听器
 # 且不调用 scheduleEngineFrame，在 Flutter 3.38+ 引擎上画面永远不合成（真机实测
 # 2026-11-21：纹理注册成功、mpv 出帧、但 SurfaceView 全黑）。
-# 2.0.1 的 SurfaceProducer 路径要求 Impeller（manifest EnableImpeller=true）。
+# 注意：HyperOS/mt6878 上 Impeller 遇到 media_kit 视频纹理后 raster 线程停摆，
+# 因此 AndroidManifest.xml 中显式设置了 EnableImpeller=false（配合 vo=mediacodec_embed）。
 dependency_overrides:
   path_provider_android: 2.2.12

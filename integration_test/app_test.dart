@@ -28,7 +28,7 @@ void main() {
       'site.url': 'http://localhost:5244',
       'site.name': '本机测试',
     });
-    app.main();
+    await app.main();
     await pumpFor(tester, const Duration(seconds: 3));
 
     // 1. 首页应出现（不再显示无站点引导）
@@ -61,8 +61,8 @@ void main() {
     // 5. 点击一个 mp3 → 进入音频页，队列应为同目录全部 5 个 mp3（不含 txt）
     await tester.tap(find.textContaining('心淡-容祖儿').first);
     await pumpFor(tester, const Duration(seconds: 8));
-    expect(find.text('正在播放'), findsOneWidget);
-    expect(find.textContaining('播放队列 (5)'), findsOneWidget);
+    expect(find.text('正在播放'), findsWidgets);
+    expect(find.text('共 5 集'), findsOneWidget);
 
     // 6. 队列内应包含其余 mp3（同目录替换语义；下方条目滚动到可见）
     expect(find.textContaining('大开眼戒-陈奕迅'), findsWidgets);

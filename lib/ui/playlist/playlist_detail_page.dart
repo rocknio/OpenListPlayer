@@ -40,7 +40,13 @@ class _PlaylistDetailPageState extends ConsumerState<PlaylistDetailPage> {
   Future<void> _play(List<PlaylistItem> items, int startIndex) async {
     final playback = ref.read(playbackProvider);
     final queue = items
-        .map((e) => QueueItem(path: e.path, name: e.name, isVideo: e.isVideo, size: e.size))
+        .map((e) => QueueItem(
+              path: e.path,
+              name: e.name,
+              isVideo: e.isVideo,
+              size: e.size,
+              thumb: e.thumb,
+            ))
         .toList();
     // 播放 = 复制为"正在播放"队列（播单本体不动），带来源 id 以使用本播单独立进度
     await playback.playQueue(queue, startIndex, playlistId: widget.playlistId);
@@ -52,13 +58,12 @@ class _PlaylistDetailPageState extends ConsumerState<PlaylistDetailPage> {
 
   /// 进入文件浏览器为本播单挑选文件
   Future<void> _addFiles() async {
-    final added = await Navigator.of(context).push<bool>(MaterialPageRoute<bool>(
+    final addedCount = await Navigator.of(context).push<int>(MaterialPageRoute<int>(
       builder: (_) => BrowserPage(targetPlaylistId: widget.playlistId),
     ));
-    if (added == true && mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('已添加文件到播单')),
-      );
+    if (addedCount != null && mounted) {
+      final msg = addedCount > 0 ? '已添加 $addedCount 个文件到播单' : '所选文件已在播单中';
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
     }
   }
 
@@ -181,6 +186,23 @@ class _PlaylistDetailPageState extends ConsumerState<PlaylistDetailPage> {
                       color: Theme.of(context).colorScheme.onErrorContainer),
                 ),
                 direction: DismissDirection.endToStart,
+                confirmDismiss: (_) => showDialog<bool>(
+                  context: context,
+                  builder: (ctx) => AlertDialog(
+                    title: const Text('移出播单'),
+                    content: Text('确定将"${it.name}"从本播单移除？（同时清除本播单内的播放进度）'),
+                    actions: [
+                      TextButton(
+                        onPressed: () => Navigator.pop(ctx, false),
+                        child: const Text('取消'),
+                      ),
+                      FilledButton(
+                        onPressed: () => Navigator.pop(ctx, true),
+                        child: const Text('移除'),
+                      ),
+                    ],
+                  ),
+                ),
                 onDismissed: (_) => db.removePlaylistItem(it.id),
                 child: _itemTile(it, progress[it.path],
                     isLastPlayed: i == lastPlayedIndex, onTap: () => _play(items, i)),

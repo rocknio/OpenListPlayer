@@ -24,10 +24,17 @@ class AppSettingsNotifier extends Notifier<AppSettings> {
   SettingsService get _svc => ref.read(settingsServiceProvider);
 
   Future<void> setSite(SiteConfig? site) async {
+    final prevUrl = state.site?.baseUrl;
     await _svc.saveSite(site);
     final s = _svc.load();
     state = s;
-    ref.read(playbackProvider).onSettingsChanged();
+    final nextUrl = s.site?.baseUrl;
+    final playback = ref.read(playbackProvider);
+    if (prevUrl != nextUrl) {
+      await playback.onSiteChanged();
+    } else {
+      playback.onSettingsChanged();
+    }
   }
 
   Future<void> setSortMode(SortMode mode) async {
@@ -62,7 +69,9 @@ final settingsProvider = NotifierProvider<AppSettingsNotifier, AppSettings>(AppS
 /// OpenList 客户端（随站点地址变化重建）
 final apiProvider = Provider<OpenListClient>((ref) {
   final site = ref.watch(settingsProvider.select((s) => s.site));
-  return OpenListClient(site: site ?? const SiteConfig(baseUrl: ''));
+  final client = OpenListClient(site: site ?? const SiteConfig(baseUrl: ''));
+  ref.onDispose(client.close);
+  return client;
 });
 
 /// 是否已配置站点
@@ -83,10 +92,12 @@ final playbackProvider = Provider<PlaybackController>((ref) {
 });
 
 final audioHandlerProvider = Provider<PlayerAudioHandler>((ref) {
-  return PlayerAudioHandler(
+  final h = PlayerAudioHandler(
     ref.read(playbackProvider),
     settings: () => ref.read(settingsProvider),
   );
+  ref.onDispose(h.dispose);
+  return h;
 });
 
 /// SharedPreferences 原始实例（settingsServiceProvider 内部也需要）

@@ -37,6 +37,7 @@ class PlaylistsPage extends ConsumerWidget {
                   );
                 }
                 return ListView(
+                  padding: const EdgeInsets.only(bottom: 88),
                   children: [
                     for (final p in list)
                       ListTile(
@@ -98,22 +99,52 @@ class PlaylistsPage extends ConsumerWidget {
 
   Future<String?> _promptName(BuildContext context,
       {required String title, String? initial}) {
-    final ctrl = TextEditingController(text: initial ?? '');
     return showDialog<String>(
       context: context,
-      builder: (context) => AlertDialog(
-        title: Text(title),
-        content: TextField(
-          controller: ctrl,
-          autofocus: true,
-          decoration: const InputDecoration(hintText: '播单名称'),
-          onSubmitted: (v) => Navigator.pop(context, v),
-        ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(context), child: const Text('取消')),
-          FilledButton(onPressed: () => Navigator.pop(context, ctrl.text), child: const Text('确定')),
-        ],
+      builder: (context) => _PlaylistNameDialog(title: title, initial: initial),
+    );
+  }
+}
+
+class _PlaylistNameDialog extends StatefulWidget {
+  const _PlaylistNameDialog({required this.title, this.initial});
+
+  final String title;
+  final String? initial;
+
+  @override
+  State<_PlaylistNameDialog> createState() => _PlaylistNameDialogState();
+}
+
+class _PlaylistNameDialogState extends State<_PlaylistNameDialog> {
+  late final TextEditingController _ctrl;
+
+  @override
+  void initState() {
+    super.initState();
+    _ctrl = TextEditingController(text: widget.initial ?? '');
+  }
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: Text(widget.title),
+      content: TextField(
+        controller: _ctrl,
+        autofocus: true,
+        decoration: const InputDecoration(hintText: '播单名称'),
+        onSubmitted: (v) => Navigator.pop(context, v),
       ),
+      actions: [
+        TextButton(onPressed: () => Navigator.pop(context), child: const Text('取消')),
+        FilledButton(onPressed: () => Navigator.pop(context, _ctrl.text), child: const Text('确定')),
+      ],
     );
   }
 }

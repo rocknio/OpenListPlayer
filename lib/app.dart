@@ -1,5 +1,7 @@
-/// App 根组件：主题（深色跟随系统）+ 底部 4 tab 壳 + 生命周期处理。
+/// App 根组件：统一米白浅色主题 + 底部 4 tab 壳 + 生命周期处理。
 library;
+
+import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -42,9 +44,11 @@ class _AppState extends ConsumerState<App> with WidgetsBindingObserver {
     switch (state) {
       case AppLifecycleState.paused:
       case AppLifecycleState.detached:
-        // 视频且设置"后台不放声音"→ 暂停；同时落盘进度/会话
-        handler.onAppBackgrounded();
-        playback.onAppPaused();
+        // 视频且设置"后台不放声音"→ 先串行暂停，随后统一落盘进度/会话，避免并发重复写库
+        unawaited(() async {
+          await handler.onAppBackgrounded();
+          await playback.onAppPaused();
+        }());
         break;
       case AppLifecycleState.inactive:
       case AppLifecycleState.resumed:

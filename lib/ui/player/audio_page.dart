@@ -23,17 +23,61 @@ class AudioPage extends ConsumerStatefulWidget {
 class _AudioPageState extends ConsumerState<AudioPage> {
   final _scroll = ScrollController();
   final _queueKey = GlobalKey();
+  PlaybackController? _playback;
+  String? _lastItemPath;
+  double? _dragMs;
+  bool _wakelockActive = false;
 
   @override
-  void initState() {
-    super.initState();
-    WakelockPlus.enable();
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final playback = ref.read(playbackProvider);
+    if (identical(playback, _playback)) return;
+    _playback?.removeListener(_onPlaybackChanged);
+    _playback = playback..addListener(_onPlaybackChanged);
+    _lastItemPath = playback.current?.path;
+    _syncWakelock();
+  }
+
+  void _onPlaybackChanged() {
+    if (!mounted) return;
+    _syncWakelock();
+    final curPath = _playback?.current?.path;
+    final switched = curPath != _lastItemPath;
+    if (switched) _lastItemPath = curPath;
+    if (_dragMs != null && (switched || _playback?.status == PlaybackStatus.opening)) {
+      _dragMs = null;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) setState(() {});
+      });
+    }
+  }
+
+  void _syncWakelock() {
+    final s = _playback?.status;
+    final shouldWake = s == PlaybackStatus.opening ||
+        s == PlaybackStatus.buffering ||
+        s == PlaybackStatus.playing;
+    if (shouldWake == _wakelockActive) return;
+    _wakelockActive = shouldWake;
+    try {
+      if (shouldWake) {
+        WakelockPlus.enable();
+      } else {
+        WakelockPlus.disable();
+      }
+    } catch (_) {}
   }
 
   @override
   void dispose() {
+    _playback?.removeListener(_onPlaybackChanged);
     _scroll.dispose();
-    WakelockPlus.disable();
+    if (_wakelockActive) {
+      try {
+        WakelockPlus.disable();
+      } catch (_) {}
+    }
     super.dispose();
   }
 
@@ -161,7 +205,7 @@ class _AudioPageState extends ConsumerState<AudioPage> {
       borderRadius: BorderRadius.circular(24),
       child: Container(
         height: 300,
-        color: const Color(0xFFF1EDE5),
+        color: AudioTone.coverFill,
         child: Stack(
           fit: StackFit.expand,
           children: [
@@ -169,7 +213,7 @@ class _AudioPageState extends ConsumerState<AudioPage> {
               Image.network(
                 item.thumb,
                 fit: BoxFit.cover,
-                errorBuilder: (_, _, _) => const SizedBox.shrink(),
+                errorBuilder: (_, _, _) => const AudioPlaceholderArt(isDark: false),
               ),
             if (!hasThumb) const AudioPlaceholderArt(isDark: false),
           ],
@@ -225,11 +269,16 @@ class _AudioPageState extends ConsumerState<AudioPage> {
 
   Widget _progress(PlaybackController playback) {
     return StreamBuilder<Duration>(
-      stream: playback.player.stream.position,
+      stream: playback.positionStream,
       builder: (context, snap) {
-        final pos = snap.data ?? Duration.zero;
-        final dur = playback.player.state.duration;
-        final remaining = dur - pos;
+        final streamPos = snap.data ?? playback.currentPosition;
+        final dur = playback.currentDuration;
+        final effectiveMs = _dragMs ??
+            (dur.inMilliseconds > 0
+                ? streamPos.inMilliseconds.clamp(0, dur.inMilliseconds).toDouble()
+                : 0.0);
+        final pos = Duration(milliseconds: effectiveMs.toInt());
+        final remaining = dur > pos ? dur - pos : Duration.zero;
         return Column(
           children: [
             SliderTheme(
@@ -245,10 +294,22 @@ class _AudioPageState extends ConsumerState<AudioPage> {
               ),
               child: Slider(
                 value: dur.inMilliseconds > 0
-                    ? pos.inMilliseconds.clamp(0, dur.inMilliseconds).toDouble()
+                    ? effectiveMs.clamp(0.0, dur.inMilliseconds.toDouble())
                     : 0,
                 max: dur.inMilliseconds > 0 ? dur.inMilliseconds.toDouble() : 1,
-                onChanged: (v) => playback.seek(Duration(milliseconds: v.toInt())),
+                onChangeStart: dur.inMilliseconds > 0
+                    ? (v) => setState(() => _dragMs = v)
+                    : null,
+                onChanged: dur.inMilliseconds > 0
+                    ? (v) => setState(() => _dragMs = v)
+                    : null,
+                onChangeEnd: dur.inMilliseconds > 0
+                    ? (v) {
+                        if (_dragMs == null) return; // 拖动中途已切歌重置，忽略松手旧位置
+                        setState(() => _dragMs = null);
+                        playback.seek(Duration(milliseconds: v.toInt()));
+                      }
+                    : null,
               ),
             ),
             Padding(
@@ -298,9 +359,9 @@ class _AudioPageState extends ConsumerState<AudioPage> {
 
   Widget _playButton(PlaybackController playback) {
     return StreamBuilder<bool>(
-      stream: playback.player.stream.playing,
+      stream: playback.playingStream,
       builder: (context, snap) {
-        final playing = snap.data ?? playback.player.state.playing;
+        final playing = snap.data ?? playback.isPlaying;
         final busy = playback.status == PlaybackStatus.buffering ||
             playback.status == PlaybackStatus.opening;
         return Semantics(
@@ -350,21 +411,25 @@ class _AudioPageState extends ConsumerState<AudioPage> {
     return Row(
       mainAxisAlignment: MainAxisAlignment.spaceBetween,
       children: [
-        InkWell(
-          borderRadius: BorderRadius.circular(999),
-          onTap: () => showSpeedPanel(context, playback),
-          child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 9),
-            decoration: BoxDecoration(
-              color: AudioTone.sand,
-              borderRadius: BorderRadius.circular(999),
-            ),
-            child: Text(
-              formatSpeed(playback.speed),
-              style: const TextStyle(
-                fontSize: 13,
-                fontWeight: FontWeight.w500,
-                color: AudioTone.accent,
+        Semantics(
+          button: true,
+          label: '播放速度 ${formatSpeed(playback.speed)}',
+          child: InkWell(
+            borderRadius: BorderRadius.circular(999),
+            onTap: () => showSpeedPanel(context, playback),
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 9),
+              decoration: BoxDecoration(
+                color: AudioTone.sand,
+                borderRadius: BorderRadius.circular(999),
+              ),
+              child: Text(
+                formatSpeed(playback.speed),
+                style: const TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w500,
+                  color: AudioTone.accent,
+                ),
               ),
             ),
           ),
@@ -446,7 +511,7 @@ class _AudioPageState extends ConsumerState<AudioPage> {
           width: size,
           height: size,
           decoration: BoxDecoration(
-            color: active ? AudioTone.sand : const Color(0xFFF1EDE5),
+            color: active ? AudioTone.sand : AudioTone.coverFill,
             borderRadius: BorderRadius.circular(radius),
           ),
           child: Icon(
@@ -479,17 +544,17 @@ class _AudioPageState extends ConsumerState<AudioPage> {
 
   Widget _currentCard(PlaybackController playback, QueueItem item) {
     return StreamBuilder<Duration>(
-      stream: playback.player.stream.position,
+      stream: playback.positionStream,
       builder: (context, snap) {
-        final pos = snap.data ?? Duration.zero;
-        final dur = playback.player.state.duration;
+        final pos = snap.data ?? playback.currentPosition;
+        final dur = playback.currentDuration;
         return Container(
           padding: const EdgeInsets.all(12),
           decoration: BoxDecoration(
             color: AudioTone.surface,
             borderRadius: BorderRadius.circular(16),
             boxShadow: const [
-              BoxShadow(color: Color(0x0D21201D), blurRadius: 16, offset: Offset(0, 4)),
+              BoxShadow(color: AudioTone.cardShadow, blurRadius: 16, offset: Offset(0, 4)),
             ],
           ),
           child: Row(
@@ -536,8 +601,10 @@ class _AudioPageState extends ConsumerState<AudioPage> {
       ),
       child: InkWell(
         borderRadius: BorderRadius.circular(12),
-        // 当前项保持在列表原位并高亮；点击它不重开播放，避免从头播放。
-        onTap: isCurrent ? null : () => playback.jumpTo(index),
+        // 当前项若已开播保持原位不重开（避免从头播）；恢复态 idle 下点击则触发续播开播。
+        onTap: isCurrent
+            ? (playback.status == PlaybackStatus.idle ? () => playback.resumeSession() : null)
+            : () => playback.jumpTo(index),
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 9),
           child: Row(

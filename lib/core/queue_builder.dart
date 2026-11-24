@@ -24,10 +24,13 @@ List<FsEntry> sortEntries(List<FsEntry> entries, SortMode mode) {
   return [...dirs, ...files];
 }
 
-/// 从目录条目构建音视频队列（过滤非媒体，按设置排序）
+/// 从目录条目构建音视频队列（过滤非媒体，按设置排序，保证与文件浏览器列表顺序一致）
 List<QueueItem> buildQueueFromDir(String dirPath, List<FsEntry> entries, SortMode mode) {
-  final items = entries
-      .where((e) => !e.isDirectory && isMediaFile(e.name))
+  final mediaEntries = sortEntries(
+    entries.where((e) => !e.isDirectory && isMediaFile(e.name)).toList(),
+    mode,
+  );
+  return mediaEntries
       .map((e) => QueueItem(
             path: joinPath(dirPath, e.name),
             name: e.name,
@@ -36,10 +39,4 @@ List<QueueItem> buildQueueFromDir(String dirPath, List<FsEntry> entries, SortMod
             thumb: e.thumb,
           ))
       .toList();
-  items.sort((a, b) => switch (mode) {
-        SortMode.natural => compareNatural(a.name, b.name),
-        SortMode.name => a.name.toLowerCase().compareTo(b.name.toLowerCase()),
-        SortMode.modified => 0, // 修改时间排序对队列意义不大，回退保持 OpenList 返回序
-      });
-  return items;
 }

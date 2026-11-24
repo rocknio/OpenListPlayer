@@ -6,16 +6,15 @@ import 'package:flutter/material.dart';
 import '../../core/models.dart';
 import '../../data/app_database.dart';
 
-/// 返回 true 表示已添加
-Future<bool> showAddToPlaylistSheet(
+/// 返回实际新增的条目数；用户取消返回 null。
+Future<int?> showAddToPlaylistSheet(
     BuildContext context, AppDatabase db, List<QueueItem> items) async {
-  if (items.isEmpty) return false;
-  final result = await showModalBottomSheet<String>(
+  if (items.isEmpty) return null;
+  return showModalBottomSheet<int>(
     context: context,
     isScrollControlled: true,
     builder: (context) => _AddToPlaylistSheet(db: db, items: items),
   );
-  return result == 'added';
 }
 
 class _AddToPlaylistSheet extends StatefulWidget {
@@ -29,6 +28,7 @@ class _AddToPlaylistSheet extends StatefulWidget {
 
 class _AddToPlaylistSheetState extends State<_AddToPlaylistSheet> {
   final _newNameCtrl = TextEditingController();
+  bool _submitting = false;
 
   @override
   void dispose() {
@@ -37,22 +37,36 @@ class _AddToPlaylistSheetState extends State<_AddToPlaylistSheet> {
   }
 
   Future<void> _addTo(int playlistId) async {
-    await widget.db.addItemsToPlaylist(playlistId, widget.items);
-    if (mounted) Navigator.of(context).pop('added');
+    if (_submitting) return;
+    setState(() => _submitting = true);
+    try {
+      final count = await widget.db.addItemsToPlaylist(playlistId, widget.items);
+      if (mounted) Navigator.of(context).pop(count);
+    } finally {
+      if (mounted) setState(() => _submitting = false);
+    }
   }
 
   Future<void> _createAndAdd() async {
+    if (_submitting) return;
     final name = _newNameCtrl.text.trim();
     if (name.isEmpty) return;
-    final id = await widget.db.createPlaylist(name);
-    await _addTo(id);
+    setState(() => _submitting = true);
+    try {
+      final id = await widget.db.createPlaylist(name);
+      final count = await widget.db.addItemsToPlaylist(id, widget.items);
+      if (mounted) Navigator.of(context).pop(count);
+    } finally {
+      if (mounted) setState(() => _submitting = false);
+    }
   }
 
   @override
   Widget build(BuildContext context) {
+    final bottomInset = MediaQuery.viewInsetsOf(context).bottom;
     return SafeArea(
       child: Padding(
-        padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
+        padding: EdgeInsets.fromLTRB(16, 12, 16, 16 + bottomInset),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -80,6 +94,7 @@ class _AddToPlaylistSheetState extends State<_AddToPlaylistSheet> {
                           contentPadding: EdgeInsets.zero,
                           leading: const Icon(Icons.playlist_play),
                           title: Text(p.name),
+                          enabled: !_submitting,
                           onTap: () => _addTo(p.id),
                         ),
                     ],
@@ -93,6 +108,7 @@ class _AddToPlaylistSheetState extends State<_AddToPlaylistSheet> {
                 Expanded(
                   child: TextField(
                     controller: _newNameCtrl,
+                    enabled: !_submitting,
                     decoration: const InputDecoration(
                       labelText: '新播单名称',
                       isDense: true,
@@ -105,7 +121,7 @@ class _AddToPlaylistSheetState extends State<_AddToPlaylistSheet> {
                 FilledButton.icon(
                   icon: const Icon(Icons.add),
                   label: const Text('新建并添加'),
-                  onPressed: _createAndAdd,
+                  onPressed: _submitting ? null : _createAndAdd,
                 ),
               ],
             ),

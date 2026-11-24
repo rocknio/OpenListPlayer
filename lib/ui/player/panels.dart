@@ -19,6 +19,7 @@ ThemeData _panelTheme(BuildContext context, bool dark) =>
 /// 字幕轨道可能很多（内置+外挂+同目录可加载），必须可滚动。
 Future<void> _showPlayerSheet(
   BuildContext context,
+  PlaybackController playback,
   bool dark, {
   required Widget Function(BuildContext) builder,
 }) {
@@ -29,12 +30,15 @@ Future<void> _showPlayerSheet(
     constraints: BoxConstraints(maxHeight: maxHeight),
     builder: (sheetContext) {
       // Builder 保证面板内容拿到的是 _panelTheme 之后（内部）的 context；
-      // 直接用 sheetContext 会读到未套主题的外层，深色面板上出现深色标题。
+      // ListenableBuilder 保证面板打开期间字幕延迟、轨道列表等变化能实时刷新。
       return Theme(
         data: _panelTheme(context, dark),
         child: SafeArea(
           top: false,
-          child: Builder(builder: builder),
+          child: ListenableBuilder(
+            listenable: playback,
+            builder: (innerContext, _) => builder(innerContext),
+          ),
         ),
       );
     },
@@ -55,54 +59,57 @@ Future<void> showSpeedPanel(BuildContext context, PlaybackController playback, {
       ),
       builder: (sheetContext) => SafeArea(
         top: false,
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const SizedBox(height: 14),
-            SizedBox(
-              height: 44,
-              child: Row(
-                children: [
-                  const SizedBox(width: 44),
-                  const Expanded(
-                    child: Center(
-                      child: Text(
-                        '播放速度',
-                        style: TextStyle(
-                          fontSize: 15,
-                          fontWeight: FontWeight.w600,
-                          color: AudioTone.ink,
+        child: ListenableBuilder(
+          listenable: playback,
+          builder: (sheetContext, _) => Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const SizedBox(height: 14),
+              SizedBox(
+                height: 44,
+                child: Row(
+                  children: [
+                    const SizedBox(width: 44),
+                    const Expanded(
+                      child: Center(
+                        child: Text(
+                          '播放速度',
+                          style: TextStyle(
+                            fontSize: 15,
+                            fontWeight: FontWeight.w600,
+                            color: AudioTone.ink,
+                          ),
                         ),
                       ),
                     ),
-                  ),
-                  IconButton(
-                    tooltip: '关闭',
-                    icon: const Icon(Icons.close, size: 20, color: AudioTone.muted),
-                    onPressed: () => Navigator.pop(sheetContext),
-                  ),
-                ],
+                    IconButton(
+                      tooltip: '关闭',
+                      icon: const Icon(Icons.close, size: 20, color: AudioTone.muted),
+                      onPressed: () => Navigator.pop(sheetContext),
+                    ),
+                  ],
+                ),
               ),
-            ),
-            const SizedBox(height: 2),
-            Flexible(
-              child: ListView(
-                shrinkWrap: true,
-                padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
-                children: [
-                  for (final s in kSpeedPresets)
-                    _speedRow(sheetContext, playback, s,
-                        (playback.speed - s).abs() < 0.01),
-                ],
+              const SizedBox(height: 2),
+              Flexible(
+                child: ListView(
+                  shrinkWrap: true,
+                  padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+                  children: [
+                    for (final s in kSpeedPresets)
+                      _speedRow(sheetContext, playback, s,
+                          (playback.speed - s).abs() < 0.01),
+                  ],
+                ),
               ),
-            ),
-          ],
+            ],
+          ),
         ),
       ),
     );
   }
 
-  return _showPlayerSheet(context, dark, builder: (sheetContext) {
+  return _showPlayerSheet(context, playback, dark, builder: (sheetContext) {
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: [
@@ -181,7 +188,7 @@ Widget _speedRow(
 }
 
 Future<void> showAudioTrackPanel(BuildContext context, PlaybackController playback, {bool dark = false}) {
-  return _showPlayerSheet(context, dark, builder: (sheetContext) {
+  return _showPlayerSheet(context, playback, dark, builder: (sheetContext) {
     return ListView(
       shrinkWrap: true,
       children: [
@@ -217,8 +224,8 @@ Future<void> showAudioTrackPanel(BuildContext context, PlaybackController playba
 }
 
 Future<void> showSubtitlePanel(BuildContext context, PlaybackController playback, {bool dark = false}) {
-  final cur = playback.currentSubtitle;
-  return _showPlayerSheet(context, dark, builder: (sheetContext) {
+  return _showPlayerSheet(context, playback, dark, builder: (sheetContext) {
+    final cur = playback.currentSubtitle;
     return ListView(
       shrinkWrap: true,
       children: [

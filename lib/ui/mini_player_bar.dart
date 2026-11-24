@@ -37,43 +37,47 @@ class MiniPlayerBar extends ConsumerWidget {
             color: card,
             borderRadius: BorderRadius.circular(20),
             elevation: 8,
-            shadowColor: const Color(0x1A21201D),
-            child: InkWell(
-              borderRadius: BorderRadius.circular(20),
-              onTap: () {
-                Navigator.of(context).push(MaterialPageRoute<void>(
-                  builder: (_) => item.isVideo ? const PlayerScreen() : const AudioPage(),
-                ));
-              },
-              child: Padding(
-                padding: const EdgeInsets.fromLTRB(10, 10, 10, 10),
-                child: Row(
-                  children: [
-                    _thumb(item, 44, isDark: isDark),
-                    const SizedBox(width: 10),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Text(
-                            item.name,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: TextStyle(
-                              fontSize: 13,
-                              fontWeight: FontWeight.w500,
-                              color: titleColor,
+            shadowColor: AudioTone.barShadow,
+            child: Semantics(
+              button: true,
+              label: '打开正在播放：${item.name}',
+              child: InkWell(
+                borderRadius: BorderRadius.circular(20),
+                onTap: () {
+                  Navigator.of(context).push(MaterialPageRoute<void>(
+                    builder: (_) => item.isVideo ? const PlayerScreen() : const AudioPage(),
+                  ));
+                },
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(10, 10, 10, 10),
+                  child: Row(
+                    children: [
+                      _thumb(item, 44, isDark: isDark),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Text(
+                              item.name,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                fontSize: 13,
+                                fontWeight: FontWeight.w500,
+                                color: titleColor,
+                              ),
                             ),
-                          ),
-                          const SizedBox(height: 6),
-                          _progressLine(playback, isDark: isDark),
-                        ],
+                            const SizedBox(height: 6),
+                            _progressLine(playback, isDark: isDark),
+                          ],
+                        ),
                       ),
-                    ),
-                    const SizedBox(width: 8),
-                    _PlayPauseButton(playback: playback, isDark: isDark),
-                  ],
+                      const SizedBox(width: 8),
+                      _PlayPauseButton(playback: playback, isDark: isDark),
+                    ],
+                  ),
                 ),
               ),
             ),
@@ -125,10 +129,10 @@ class MiniPlayerBar extends ConsumerWidget {
 
   Widget _progressLine(PlaybackController playback, {required bool isDark}) {
     return StreamBuilder<Duration>(
-      stream: playback.player.stream.position,
+      stream: playback.positionStream,
       builder: (context, snap) {
-        final pos = snap.data ?? Duration.zero;
-        final dur = playback.player.state.duration;
+        final pos = snap.data ?? playback.currentPosition;
+        final dur = playback.currentDuration;
         final ratio = dur.inMilliseconds > 0
             ? (pos.inMilliseconds / dur.inMilliseconds).clamp(0.0, 1.0)
             : 0.0;
@@ -156,9 +160,9 @@ class _PlayPauseButton extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return StreamBuilder<bool>(
-      stream: playback.player.stream.playing,
+      stream: playback.playingStream,
       builder: (context, snap) {
-        final playing = snap.data ?? playback.player.state.playing;
+        final playing = snap.data ?? playback.isPlaying;
         return Semantics(
           button: true,
           label: playing ? '暂停' : '播放',

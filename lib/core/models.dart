@@ -19,8 +19,31 @@ class SiteConfig {
         token: token ?? this.token,
       );
 
-  /// 拼接 OpenList REST API 地址
-  Uri apiUri(String path) => Uri.parse('$baseUrl$path');
+  /// 校验并归一化站点根地址（要求 http/https 且包含合法 host，去除末尾 /）；非法返回 null。
+  static String? tryNormalizeUrl(String raw) {
+    var url = raw.trim();
+    while (url.endsWith('/')) {
+      url = url.substring(0, url.length - 1);
+    }
+    if (url.isEmpty) return null;
+    final uri = Uri.tryParse(url);
+    if (uri == null || !uri.hasScheme || (uri.scheme != 'http' && uri.scheme != 'https')) {
+      return null;
+    }
+    if (uri.host.isEmpty) return null;
+    return url;
+  }
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is SiteConfig &&
+          other.baseUrl == baseUrl &&
+          other.name == name &&
+          other.token == token;
+
+  @override
+  int get hashCode => Object.hash(baseUrl, name, token);
 }
 
 /// 网盘目录条目（fs/list 返回的单条）

@@ -13,14 +13,14 @@
 	<array>
 		<string>audio</string>
 	</array>
-	<!-- 允许 http 明文（自建 OpenList / openp2p 隧道地址可能是 http） -->
+	<!-- 允许 http 明文（自建 OpenList / openp2p 隧道地址可能是 http；注意不能同时加 NSAllowsLocalNetworking，否则 iOS 10+ 会忽略 NSAllowsArbitraryLoads） -->
 	<key>NSAppTransportSecurity</key>
 	<dict>
 		<key>NSAllowsArbitraryLoads</key>
 		<true/>
-		<key>NSAllowsLocalNetworking</key>
-		<true/>
 	</dict>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>用于连接局域网或内网组网中的 OpenList 服务播放音视频</string>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIdentifier</key>

@@ -2,7 +2,6 @@
 library;
 
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/media_types.dart';
@@ -31,6 +30,8 @@ class _BrowserPageState extends ConsumerState<BrowserPage> {
   List<FsEntry> _entries = [];
   bool _loading = false;
   String? _error;
+  int _loadSerial = 0;
+  bool _openingMedia = false;
 
   bool get _pickMode => widget.targetPlaylistId != null;
 
@@ -61,6 +62,7 @@ class _BrowserPageState extends ConsumerState<BrowserPage> {
 
   Future<void> _load({bool refresh = false, String? path}) async {
     final p = path ?? _path;
+    final serial = ++_loadSerial;
     setState(() {
       _loading = true;
       _error = null;
@@ -74,14 +76,16 @@ class _BrowserPageState extends ConsumerState<BrowserPage> {
     try {
       final api = ref.read(apiProvider);
       final entries = await api.listDir(p, refresh: refresh);
-      if (!mounted) return;
+      if (!mounted || serial != _loadSerial) return;
       final sort = ref.read(settingsProvider).sortMode;
       setState(() => _entries = sortEntries(entries, sort));
     } catch (e) {
-      if (!mounted) return;
+      if (!mounted || serial != _loadSerial) return;
       setState(() => _error = '$e');
     } finally {
-      if (mounted) setState(() => _loading = false);
+      if (mounted && serial == _loadSerial) {
+        setState(() => _loading = false);
+      }
     }
   }
 
@@ -94,13 +98,19 @@ class _BrowserPageState extends ConsumerState<BrowserPage> {
   }
 
   Future<void> _tapMedia(FsEntry file) async {
-    final playback = ref.read(playbackProvider);
-    // 同目录音视频整体替换"正在播放"队列，从所点文件开播（自动续播进度）
-    await playback.playFromDirectory(_path, _entries, file.name);
-    if (!mounted) return;
-    Navigator.of(context).push(MaterialPageRoute<void>(
-      builder: (_) => isVideoFile(file.name) ? const PlayerScreen() : const AudioPage(),
-    ));
+    if (_openingMedia) return;
+    _openingMedia = true;
+    try {
+      final playback = ref.read(playbackProvider);
+      // 同目录音视频整体替换"正在播放"队列，从所点文件开播（自动续播进度）
+      await playback.playFromDirectory(_path, _entries, file.name);
+      if (!mounted) return;
+      await Navigator.of(context).push(MaterialPageRoute<void>(
+        builder: (_) => isVideoFile(file.name) ? const PlayerScreen() : const AudioPage(),
+      ));
+    } finally {
+      _openingMedia = false;
+    }
   }
 
   void _longPressMedia(FsEntry file) {
@@ -111,7 +121,6 @@ class _BrowserPageState extends ConsumerState<BrowserPage> {
     setState(() {
       final p = _pathOf(file);
       _selected.containsKey(p) ? _selected.remove(p) : _selected[p] = _itemOf(file);
-      if (_selected.isEmpty && !_pickMode) Navigator.of(context).maybePop(); // 退出多选 appbar
     });
   }
 
@@ -144,16 +153,16 @@ class _BrowserPageState extends ConsumerState<BrowserPage> {
     if (items.isEmpty) return;
     final db = ref.read(dbProvider);
     if (_pickMode) {
-      // 选择模式：直接写入目标播单，返回 true 由播单详情页给出提示
-      await db.addItemsToPlaylist(widget.targetPlaylistId!, items);
-      if (mounted) Navigator.of(context).pop(true);
+      // 选择模式：直接写入目标播单，返回实际新增数量由播单详情页给出提示
+      final addedCount = await db.addItemsToPlaylist(widget.targetPlaylistId!, items);
+      if (mounted) Navigator.of(context).pop(addedCount);
       return;
     }
-    final added = await showAddToPlaylistSheet(context, db, items);
-    if (added && mounted) {
+    final addedCount = await showAddToPlaylistSheet(context, db, items);
+    if (addedCount != null && mounted) {
       setState(() => _selected.clear());
-      ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('已添加 ${items.length} 个文件到播单')));
+      final msg = addedCount > 0 ? '已添加 $addedCount 个文件到播单' : '所选文件已在播单中';
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
     }
   }
 
@@ -166,27 +175,26 @@ class _BrowserPageState extends ConsumerState<BrowserPage> {
       }
     });
     final hasSite = ref.watch(hasSiteProvider);
+    final isCurrentTab = _pickMode || ref.watch(tabIndexProvider) == 1;
     if (!hasSite) {
       return Scaffold(
         appBar: AppBar(title: Text(_pickMode ? '添加文件到播单' : '文件')),
         body: NoSiteHint(onGoSettings: () => _goSettings()),
       );
     }
+    final interceptBack = !_pickMode && isCurrentTab && (_selecting || _path != '/');
     return PopScope(
-      // 选择模式是 push 进来的页面，交给默认返回逻辑回到播单详情页
-      canPop: _pickMode,
+      // 选择模式、非当前激活 tab、或已在根目录无多选时交给系统默认返回逻辑
+      canPop: !interceptBack,
       onPopInvokedWithResult: (didPop, _) {
-        if (didPop || _pickMode) return;
+        if (didPop || !interceptBack) return;
         if (_selecting) {
           setState(() => _selected.clear());
           return;
         }
         if (_path != '/') {
           _backTo(_parentOf(_path));
-          return;
         }
-        // 根目录：退出应用
-        SystemNavigator.pop();
       },
       child: Scaffold(
         appBar: _selecting ? _selectionAppBar() : _normalAppBar(),
@@ -351,6 +359,7 @@ class _BrowserPageState extends ConsumerState<BrowserPage> {
       onRefresh: () => _load(refresh: true),
       child: ListView.builder(
         physics: const AlwaysScrollableScrollPhysics(),
+        padding: _selecting ? const EdgeInsets.only(bottom: 84) : null,
         itemCount: _entries.length,
         itemBuilder: (context, i) => _tile(_entries[i]),
       ),

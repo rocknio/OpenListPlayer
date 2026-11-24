@@ -31,6 +31,13 @@ class AudioTone {
   /// C2B8A9 暖褐（描边）
   static const taupe = Color(0xFFC2B8A9);
 
+  /// F1EDE5 封面占位暖底（介于 bg 与 sand 之间）
+  static const coverFill = Color(0xFFF1EDE5);
+
+  /// 墨色轻阴影
+  static const cardShadow = Color(0x0D21201D);
+  static const barShadow = Color(0x1A21201D);
+
   // ---- 排版 ----
   static const title = TextStyle(
     fontSize: 29,

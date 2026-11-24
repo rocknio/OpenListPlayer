@@ -18,6 +18,7 @@ class Playlists extends Table {
 }
 
 /// 播单条目（手动排序序号 position）
+@TableIndex(name: 'idx_playlist_items_pid_pos', columns: {#playlistId, #position})
 class PlaylistItems extends Table {
   IntColumn get id => integer().autoIncrement()();
   IntColumn get playlistId =>
@@ -26,6 +27,7 @@ class PlaylistItems extends Table {
   TextColumn get name => text()();
   BoolColumn get isVideo => boolean()();
   IntColumn get size => integer().withDefault(const Constant(0))();
+  TextColumn get thumb => text().withDefault(const Constant(''))();
   IntColumn get position => integer()();
 }
 
@@ -100,6 +102,8 @@ class SessionState extends Table {
   TextColumn get queueJson => text()();
   IntColumn get currentIndex => integer()();
   IntColumn get positionMs => integer()();
+  /// 当前曲目已知总时长（毫秒），用于首次未满 5s 即拖动进度条退出后的恢复判定
+  IntColumn get durationMs => integer().withDefault(const Constant(0))();
   /// 会话来源播单 id，用于恢复后继续写入该播单的独立进度
   IntColumn get sourcePlaylistId => integer().nullable()();
   DateTimeColumn get savedAt => dateTime().withDefault(currentDateAndTime)();
@@ -127,7 +131,7 @@ class AppDatabase extends _$AppDatabase {
             ));
 
   @override
-  int get schemaVersion => 3;
+  int get schemaVersion => 4;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -136,6 +140,7 @@ class AppDatabase extends _$AppDatabase {
         // 老用户逐级升级：
         // v1 → v2：播单进度表 + 会话表加来源播单列
         // v2 → v3：进度表加 finished 列 + 续播指针表
+        // v3 → v4：播单条目加 thumb 列与 (playlistId, position) 索引 + 会话表加 durationMs 列
         onUpgrade: (m, from, to) async {
           if (from < 2) {
             // createTable 用的是当前表定义（已含 finished 列），不能再 addColumn
@@ -146,6 +151,11 @@ class AppDatabase extends _$AppDatabase {
           }
           if (from < 3) {
             await m.createTable(playlistStates);
+          }
+          if (from < 4) {
+            await m.addColumn(playlistItems, playlistItems.thumb);
+            await m.addColumn(sessionState, sessionState.durationMs);
+            await m.createIndex(idxPlaylistItemsPidPos);
           }
         },
         // SQLite 默认不检查外键，表上的 ON DELETE CASCADE（删播单连带清条目 / 进度 / 续播指针）要显式开启才生效
@@ -158,6 +168,11 @@ class AppDatabase extends _$AppDatabase {
 
   Stream<List<Playlist>> playlistsStream() => select(playlists).watch();
 
+  Future<bool> playlistExists(int id) async {
+    final row = await (select(playlists)..where((t) => t.id.equals(id))).getSingleOrNull();
+    return row != null;
+  }
+
   Stream<List<PlaylistItem>> playlistItemsStream(int playlistId) {
     return (select(playlistItems)..where((t) => t.playlistId.equals(playlistId))
           ..orderBy([(t) => OrderingTerm.asc(t.position)]))
@@ -169,60 +184,84 @@ class AppDatabase extends _$AppDatabase {
   Future<void> renamePlaylist(int id, String name) =>
       (update(playlists)..where((t) => t.id.equals(id))).write(PlaylistsCompanion(name: Value(name)));
 
-  Future<void> deletePlaylist(int id) => (delete(playlists)..where((t) => t.id.equals(id))).go();
+  Future<void> deletePlaylist(int id) => transaction(() async {
+        // 清理会话中可能残留的已删除播单指针
+        await (update(sessionState)..where((t) => t.sourcePlaylistId.equals(id)))
+            .write(const SessionStateCompanion(sourcePlaylistId: Value(null)));
+        await (delete(playlists)..where((t) => t.id.equals(id))).go();
+      });
 
-  Future<void> addItemsToPlaylist(int playlistId, List<QueueItem> items) async {
-    // 当前最大 position
-    final last = await ((select(playlistItems)
-          ..where((t) => t.playlistId.equals(playlistId)))
-          ..orderBy([(t) => OrderingTerm.desc(t.position)])
-          ..limit(1))
-        .get();
-    var pos = last.isEmpty ? -1 : last.first.position;
-    // 同路径去重：跳过已存在的
-    final existing = await (select(playlistItems)
-          ..where((t) => t.playlistId.equals(playlistId) & t.path.isIn(items.map((i) => i.path))))
-        .get();
-    final existingPaths = existing.map((e) => e.path).toSet();
-    final batchItems = <PlaylistItemsCompanion>[];
-    for (final it in items) {
-      if (existingPaths.contains(it.path)) continue;
-      batchItems.add(PlaylistItemsCompanion.insert(
-        playlistId: playlistId,
-        path: it.path,
-        name: it.name,
-        isVideo: it.isVideo,
-        size: Value(it.size),
-        position: ++pos,
-      ));
-    }
-    if (batchItems.isNotEmpty) {
-      await batch((b) => b.insertAll(playlistItems, batchItems));
-    }
+  /// 向播单批量追加条目（同路径自动去重），返回实际新增的条目数。
+  Future<int> addItemsToPlaylist(int playlistId, List<QueueItem> items) {
+    if (items.isEmpty) return Future.value(0);
+    return transaction(() async {
+      // 当前最大 position
+      final last = await ((select(playlistItems)
+            ..where((t) => t.playlistId.equals(playlistId)))
+            ..orderBy([(t) => OrderingTerm.desc(t.position)])
+            ..limit(1))
+          .get();
+      var pos = last.isEmpty ? -1 : last.first.position;
+      // 同路径去重：分批查询已存在的 path，避免大目录超过 SQLite 变量上限
+      final existingPaths = <String>{};
+      const chunkSize = 500;
+      for (var start = 0; start < items.length; start += chunkSize) {
+        final chunk = items.skip(start).take(chunkSize).map((i) => i.path).toList();
+        final rows = await (select(playlistItems)
+              ..where((t) => t.playlistId.equals(playlistId) & t.path.isIn(chunk)))
+            .get();
+        for (final r in rows) {
+          existingPaths.add(r.path);
+        }
+      }
+      final batchItems = <PlaylistItemsCompanion>[];
+      for (final it in items) {
+        if (!existingPaths.add(it.path)) continue;
+        batchItems.add(PlaylistItemsCompanion.insert(
+          playlistId: playlistId,
+          path: it.path,
+          name: it.name,
+          isVideo: it.isVideo,
+          size: Value(it.size),
+          thumb: Value(it.thumb),
+          position: ++pos,
+        ));
+      }
+      if (batchItems.isNotEmpty) {
+        await batch((b) => b.insertAll(playlistItems, batchItems));
+      }
+      return batchItems.length;
+    });
   }
 
-  Future<void> removePlaylistItem(int itemId) async {
-    // 用 path 精确清理该条目在所属播单里的进度（避免残留脏数据）
-    final row = await (select(playlistItems)..where((t) => t.id.equals(itemId))).getSingleOrNull();
-    if (row != null) {
-      await (delete(playlistProgresses)
-            ..where((t) => t.playlistId.equals(row.playlistId) & t.path.equals(row.path)))
-          .go();
-      // 续播指针正指向这个文件 → 一并清掉，续播退化为"第一个没看完的条目"
-      await (delete(playlistStates)
-            ..where((t) => t.playlistId.equals(row.playlistId) & t.path.equals(row.path)))
-          .go();
-    }
-    await (delete(playlistItems)..where((t) => t.id.equals(itemId))).go();
-  }
+  Future<void> removePlaylistItem(int itemId) => transaction(() async {
+        // 用 path 精确清理该条目在所属播单里的进度（避免残留脏数据）
+        final row =
+            await (select(playlistItems)..where((t) => t.id.equals(itemId))).getSingleOrNull();
+        if (row != null) {
+          await (delete(playlistProgresses)
+                ..where((t) => t.playlistId.equals(row.playlistId) & t.path.equals(row.path)))
+              .go();
+          // 续播指针正指向这个文件 → 一并清掉，续播退化为"第一个没看完的条目"
+          await (delete(playlistStates)
+                ..where((t) => t.playlistId.equals(row.playlistId) & t.path.equals(row.path)))
+              .go();
+        }
+        await (delete(playlistItems)..where((t) => t.id.equals(itemId))).go();
+      });
 
-  Future<void> reorderPlaylistItems(int playlistId, List<PlaylistItem> ordered) async {
-    for (var i = 0; i < ordered.length; i++) {
-      await (update(playlistItems)
-            ..where((t) => t.id.equals(ordered[i].id) & t.playlistId.equals(playlistId)))
-          .write(PlaylistItemsCompanion(position: Value(i)));
-    }
-  }
+  Future<void> reorderPlaylistItems(int playlistId, List<PlaylistItem> ordered) =>
+      transaction(() async {
+        await batch((b) {
+          for (var i = 0; i < ordered.length; i++) {
+            b.update(
+              playlistItems,
+              PlaylistItemsCompanion(position: Value(i)),
+              where: (t) => t.id.equals(ordered[i].id) & t.playlistId.equals(playlistId),
+            );
+          }
+        });
+      });
 
   // ---------- 进度 ----------
 
@@ -293,14 +332,25 @@ class AppDatabase extends _$AppDatabase {
 
   // ---------- 历史 ----------
 
-  Future<void> touchHistory(QueueItem item) => into(playHistories).insertOnConflictUpdate(
-        PlayHistoriesCompanion.insert(
-          path: item.path,
-          name: item.name,
-          isVideo: item.isVideo,
-          playedAt: DateTime.now(),
-        ),
-      );
+  Future<void> touchHistory(QueueItem item) => transaction(() async {
+        await into(playHistories).insertOnConflictUpdate(
+          PlayHistoriesCompanion.insert(
+            path: item.path,
+            name: item.name,
+            isVideo: item.isVideo,
+            playedAt: DateTime.now(),
+          ),
+        );
+        // 保留最近 20 条，裁剪更早的历史记录避免无限增长
+        final keep = await (select(playHistories)
+              ..orderBy([(t) => OrderingTerm.desc(t.playedAt)])
+              ..limit(20))
+            .get();
+        if (keep.length >= 20) {
+          final keepPaths = keep.map((e) => e.path).toList();
+          await (delete(playHistories)..where((t) => t.path.isNotIn(keepPaths))).go();
+        }
+      });
 
   Stream<List<PlayHistory>> historyStream({int limit = 20}) {
     final q = select(playHistories)..orderBy([(t) => OrderingTerm.desc(t.playedAt)])..limit(limit);
@@ -312,15 +362,17 @@ class AppDatabase extends _$AppDatabase {
   // ---------- 轨道偏好 ----------
 
   Future<void> saveTrackPrefs(String path,
-      {String? audioTrack, String? subtitleTrack, int? subDelayMs}) async {
-    final old = await (select(trackPrefsTable)..where((t) => t.path.equals(path))).getSingleOrNull();
-    await into(trackPrefsTable).insertOnConflictUpdate(TrackPrefsTableCompanion.insert(
-      path: path,
-      audioTrack: Value(audioTrack ?? old?.audioTrack),
-      subtitleTrack: Value(subtitleTrack ?? old?.subtitleTrack),
-      subDelayMs: Value(subDelayMs ?? old?.subDelayMs ?? 0),
-    ));
-  }
+          {String? audioTrack, String? subtitleTrack, int? subDelayMs}) =>
+      transaction(() async {
+        final old =
+            await (select(trackPrefsTable)..where((t) => t.path.equals(path))).getSingleOrNull();
+        await into(trackPrefsTable).insertOnConflictUpdate(TrackPrefsTableCompanion.insert(
+          path: path,
+          audioTrack: Value(audioTrack ?? old?.audioTrack),
+          subtitleTrack: Value(subtitleTrack ?? old?.subtitleTrack),
+          subDelayMs: Value(subDelayMs ?? old?.subDelayMs ?? 0),
+        ));
+      });
 
   Future<TrackPrefs?> getTrackPrefs(String path) =>
       (select(trackPrefsTable)..where((t) => t.path.equals(path))).getSingleOrNull();
@@ -328,19 +380,27 @@ class AppDatabase extends _$AppDatabase {
   // ---------- 会话 ----------
 
   Future<void> saveSession(List<QueueItem> queue, int index, Duration position,
-      {int? sourcePlaylistId}) async {
+      {Duration duration = Duration.zero, int? sourcePlaylistId}) async {
     final json = jsonEncode(queue.map(queueItemToJson).toList());
     await into(sessionState).insertOnConflictUpdate(SessionStateCompanion.insert(
+      id: const Value(1),
       queueJson: json,
       currentIndex: index,
       positionMs: position.inMilliseconds,
+      durationMs: Value(duration.inMilliseconds),
       sourcePlaylistId: Value(sourcePlaylistId),
       savedAt: Value(DateTime.now()),
     ));
   }
 
-  Future<({List<QueueItem> queue, int index, Duration position, int? sourcePlaylistId})?>
-      loadSession() async {
+  Future<
+      ({
+        List<QueueItem> queue,
+        int index,
+        Duration position,
+        Duration duration,
+        int? sourcePlaylistId,
+      })?> loadSession() async {
     final row = await (select(sessionState)..where((t) => t.id.equals(1))).getSingleOrNull();
     if (row == null) return null;
     try {
@@ -352,6 +412,7 @@ class AppDatabase extends _$AppDatabase {
         queue: list,
         index: row.currentIndex.clamp(0, list.length - 1),
         position: Duration(milliseconds: row.positionMs),
+        duration: Duration(milliseconds: row.durationMs),
         sourcePlaylistId: row.sourcePlaylistId,
       );
     } catch (_) {

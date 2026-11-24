@@ -3,11 +3,9 @@
 library;
 
 import 'dart:async';
-import 'dart:io';
 import 'dart:math';
 
 import 'package:flutter/foundation.dart';
-import 'package:flutter/services.dart';
 import 'package:media_kit/media_kit.dart';
 import 'package:media_kit_video/media_kit_video.dart';
 
@@ -19,6 +17,7 @@ import '../core/queue_builder.dart';
 import '../core/subtitle_match.dart';
 import '../data/app_database.dart';
 import '../data/settings_service.dart';
+import 'player_backend.dart';
 
 enum PlaybackStatus { idle, opening, buffering, playing, paused, error }
 
@@ -39,22 +38,14 @@ class PlaybackController extends ChangeNotifier {
     required AppDatabase db,
     required AppSettings Function() settings,
     Future<void> Function(double speed)? onPersistSpeed,
+    PlayerBackend? backend,
   })  : _api = api,
         _db = db,
         _settings = settings,
         _persistSpeedCb = onPersistSpeed {
-    _player = Player(
-      configuration: PlayerConfiguration(
-        bufferSize: _bufferBytes,
-        osc: false,
-        logLevel: MPVLogLevel.info, // TODO(debug): 临时调高日志排查缓冲问题，发布前改回 warn
-      ),
-    );
-    _videoController = VideoController(_player, configuration: _videoConfig());
-    _applyBufferProfile();
+    _backend = backend ?? MediaKitBackend(initialBufferBytes: _bufferBytes);
+    _bufferProfileInit = _applyBufferProfile();
     _bindStreams();
-    // TODO(debug): 临时 mpv 日志订阅，排查缓冲问题，发布前移除
-    _player.stream.log.listen((e) => debugPrint('[mpv] ${e.level} ${e.prefix}: ${e.text}'));
     _speed = settings().globalSpeed;
     mode = settings().defaultPlayMode;
   }
@@ -64,31 +55,23 @@ class PlaybackController extends ChangeNotifier {
   final AppSettings Function() _settings;
   final Future<void> Function(double speed)? _persistSpeedCb;
 
-  /// 平台相关的视频输出配置。
-  ///
-  /// Android：HyperOS/Android 16 + mt6878(Mali) 上 vo=gpu 不出帧——mpv 自建 EGL
-  /// 上下文渲染到 SurfaceTexture 在该设备静默失败（真机实测：解码线程正常、VO
-  /// 初始化成功、但 SurfaceFlinger 层永远黑；tombstone 亦为 mpv core SIGSEGV）。
-  /// mediacodec_embed 让 MediaCodec 硬解直接渲染进 Surface，mpv 完全不碰 GL。
-  ///
-  /// iOS：不存在 mediacodec_embed，mpv 会直接 `Video output ... not found!` 并
-  /// 判定 `No video or audio streams selected`，表现为永远黑屏 + 缓冲中。iOS 上
-  /// 保持 media_kit 默认（videotoolbox 硬解 + gpu 输出）。
-  static VideoControllerConfiguration _videoConfig() {
-    if (Platform.isAndroid) {
-      return const VideoControllerConfiguration(
-        vo: 'mediacodec_embed',
-        hwdec: 'mediacodec',
-      );
-    }
-    return const VideoControllerConfiguration();
-  }
+  late final PlayerBackend _backend;
+  Future<void>? _bufferProfileInit;
 
-  late final Player _player;
-  late final VideoController _videoController;
+  Player get player => _backend.rawPlayer!;
+  VideoController get videoController => _backend.rawVideoController!;
 
-  Player get player => _player;
-  VideoController get videoController => _videoController;
+  // ---------- 播放引擎流与瞬时状态转发（兼容真机与单测） ----------
+  Stream<Duration> get positionStream => _backend.positionStream;
+  Stream<Duration> get durationStream => _backend.durationStream;
+  Stream<bool> get playingStream => _backend.playingStream;
+  Stream<bool> get bufferingStream => _backend.bufferingStream;
+  Stream<Duration> get bufferStream => _backend.bufferStream;
+
+  bool get isPlaying => _backend.isPlaying;
+  Duration get currentPosition => _lastPosition;
+  Duration get currentDuration => _lastDuration;
+  Duration get currentBuffer => _backend.currentBuffer;
 
   // ---------- 对外状态 ----------
   List<QueueItem> queue = [];
@@ -97,7 +80,9 @@ class PlaybackController extends ChangeNotifier {
   String? errorText;
   PlayMode mode = PlayMode.sequentialLoop;
   double _speed = 1.0;
+  double? _tempSpeed;
   double get speed => _speed;
+  double get effectiveSpeed => _tempSpeed ?? _speed;
 
   List<TrackDesc> audioTracks = [];
   List<TrackDesc> subtitleTracks = [];
@@ -118,10 +103,13 @@ class PlaybackController extends ChangeNotifier {
   int? _sourcePlaylistId;
 
   int _retryCount = 0;
+  Timer? _retryTimer;
+  bool _handlingError = false;
   Duration _lastPosition = Duration.zero;
   Duration _lastDuration = Duration.zero;
   Timer? _progressTimer;
-  int _openSerial = 0; // 防过期 open 结果
+  int _openSerial = 0; // 当前目标打开序号（防过期异步操作）
+  int _loadedSerial = -1; // 已调用底层 openMedia 的序号（过滤旧曲目残余流事件）
   TrackPrefs? _pendingPrefs;
   bool _audioPrefApplied = false;
   bool _subPrefApplied = false;
@@ -143,58 +131,76 @@ class PlaybackController extends ChangeNotifier {
 
   int get _readaheadSecs => _settings().bufferProfile.seconds;
 
+  bool get _isStreamActive => _loadedSerial == _openSerial && !_disposed;
+
   // ---------- 生命周期 ----------
 
   void _bindStreams() {
-    _playingSub = _player.stream.playing.listen((playing) {
+    _playingSub = _backend.playingStream.listen((playing) {
+      if (!_isStreamActive) return;
       if (playing) {
         _retryCount = 0; // 恢复成功，重置重试计数
+        _handlingError = false;
         if (status == PlaybackStatus.buffering ||
             status == PlaybackStatus.opening ||
             status == PlaybackStatus.paused) {
           status = PlaybackStatus.playing;
         }
       } else {
-        if (status == PlaybackStatus.playing) status = PlaybackStatus.paused;
-        _recordProgressNow();
+        if (status == PlaybackStatus.playing) {
+          status = PlaybackStatus.paused;
+          unawaited(_recordProgressNow());
+        }
       }
       _notify();
     });
-    _bufferingSub = _player.stream.buffering.listen((b) {
+    _bufferingSub = _backend.bufferingStream.listen((b) {
+      if (!_isStreamActive) return;
       if (b) {
         if (status == PlaybackStatus.playing || status == PlaybackStatus.paused) {
           status = PlaybackStatus.buffering; // 弱网：无限等待，绝不自动跳曲
         }
       } else {
-        if (status == PlaybackStatus.buffering && _player.state.playing) {
+        if (status == PlaybackStatus.buffering && _backend.isPlaying) {
           status = PlaybackStatus.playing;
         }
       }
       _notify();
     });
-    _completedSub = _player.stream.completed.listen((completed) {
-      if (!completed) return;
-      _onCompleted();
+    _completedSub = _backend.completedStream.listen((completed) {
+      if (!completed || !_isStreamActive) return;
+      unawaited(_onCompleted());
     });
-    _errorSub = _player.stream.error.listen((e) {
-      _onPlayerError(e);
+    _errorSub = _backend.errorStream.listen((e) {
+      if (!_isStreamActive) return;
+      unawaited(_onPlayerError(e));
     });
-    _positionSub = _player.stream.position.listen((p) {
+    _positionSub = _backend.positionStream.listen((p) {
+      if (!_isStreamActive) return;
       _lastPosition = p;
     });
-    _durationSub = _player.stream.duration.listen((d) {
+    _durationSub = _backend.durationStream.listen((d) {
+      if (!_isStreamActive) return;
       _lastDuration = d;
       _maybeApplyTrackPrefs();
+      _notify();
     });
-    _tracksSub = _player.stream.tracks.listen((tracks) {
+    _tracksSub = _backend.tracksStream.listen((tracks) {
+      if (!_isStreamActive) return;
       _updateTracks(tracks);
       _maybeApplyTrackPrefs();
+    });
+    _trackSub = _backend.trackStream.listen((_) {
+      if (!_isStreamActive) return;
+      _syncCurrentTracks();
+      _notify();
     });
   }
 
   @override
   void dispose() {
     _disposed = true;
+    _retryTimer?.cancel();
     _progressTimer?.cancel();
     _playingSub?.cancel();
     _completedSub?.cancel();
@@ -204,7 +210,7 @@ class PlaybackController extends ChangeNotifier {
     _bufferingSub?.cancel();
     _tracksSub?.cancel();
     _trackSub?.cancel();
-    _player.dispose();
+    unawaited(_backend.dispose());
     super.dispose();
   }
 
@@ -212,48 +218,45 @@ class PlaybackController extends ChangeNotifier {
     if (!_disposed) notifyListeners();
   }
 
-  // ---------- 缓冲档位 ----------
+  // ---------- 缓冲档位与站点变更 ----------
 
-  static const _deviceChannel = MethodChannel('olp/device');
-  bool? _isSimulatorCache;
-
-  /// iOS 模拟器检测（原生 targetEnvironment(simulator)，Platform.environment 在 iOS 恒空）
-  Future<bool> _isSimulator() async {
-    final cached = _isSimulatorCache;
-    if (cached != null) return cached;
-    if (!Platform.isIOS) return _isSimulatorCache = false;
+  Future<void> _applyBufferProfile() async {
     try {
-      return _isSimulatorCache = await _deviceChannel.invokeMethod<bool>('isSimulator') ?? false;
-    } catch (_) {
-      return _isSimulatorCache = false;
+      await _backend.applyBufferProfile(
+        readaheadSecs: _readaheadSecs,
+        bufferBytes: _bufferBytes,
+      );
+    } catch (e) {
+      debugPrint('[OLP] applyBufferProfile failed: $e');
     }
-  }
-
-  void _applyBufferProfile() {
-    final np = _player.platform;
-    if (np is! NativePlayer) return;
-    np.setProperty('demuxer-readahead-secs', '$_readaheadSecs');
-    np.setProperty('demuxer-max-bytes', '$_bufferBytes');
-    if (Platform.isAndroid) {
-      // media_kit 默认 ao=opensles 在部分 Android 16/新设备上 SIGSEGV（mpv core 线程崩溃，
-      // 2026-11-20 真机实测），改用 Android 原生 AudioTrack 输出
-      np.setProperty('ao', 'audiotrack');
-    }
-    // iOS 模拟器上 libmpv 音频设备无法初始化（media_kit 已知限制，真机正常）：
-    // ao=null 允许无声播放；模拟器磁盘缓存目录也建不了，一并关闭
-    _isSimulator().then((sim) {
-      if (!sim || _disposed) return;
-      np.setProperty('ao', 'null');
-      np.setProperty('cache-on-disk', 'no');
-    });
   }
 
   /// 设置变更后调用
   void onSettingsChanged() {
-    _applyBufferProfile();
+    _bufferProfileInit = _applyBufferProfile();
     if (_settings().defaultPlayMode != mode && queue.isEmpty) {
       mode = _settings().defaultPlayMode;
     }
+    _notify();
+  }
+
+  /// 站点切换或清空时停止旧站点的播放队列与会话
+  Future<void> onSiteChanged() async {
+    _openSerial++;
+    _loadedSerial = -1;
+    _retryTimer?.cancel();
+    _progressTimer?.cancel();
+    _restoredPosition = null;
+    _restoredDuration = null;
+    await _backend.stop();
+    queue = [];
+    index = -1;
+    _sourcePlaylistId = null;
+    _lastPosition = Duration.zero;
+    _lastDuration = Duration.zero;
+    errorText = null;
+    status = PlaybackStatus.idle;
+    await _db.clearSession();
     _notify();
   }
 
@@ -272,11 +275,20 @@ class PlaybackController extends ChangeNotifier {
       replaceQueue(List.of(items), startIndex, sourcePlaylistId: playlistId);
 
   Future<void> replaceQueue(List<QueueItem> items, int startIndex, {int? sourcePlaylistId}) async {
-    final wasPlayingItem = current;
-    if (wasPlayingItem != null) {
-      _recordProgressNow();
+    if (items.isEmpty) {
+      await stop();
+      queue = [];
+      index = -1;
+      _sourcePlaylistId = null;
+      _notify();
+      return;
     }
-    // 新队列确定后再切换来源：上面的 _recordProgressNow 仍归属旧队列
+    // 先停掉定时器并等待旧队列进度落盘（不写旧会话），避免读写竞态与新会话被覆盖
+    _progressTimer?.cancel();
+    _retryTimer?.cancel();
+    await _recordProgressNow(saveSession: false);
+    _restoredPosition = null;
+    _restoredDuration = null;
     _sourcePlaylistId = sourcePlaylistId;
     queue = items;
     index = startIndex.clamp(0, items.length - 1);
@@ -286,7 +298,11 @@ class PlaybackController extends ChangeNotifier {
 
   Future<void> jumpTo(int i) async {
     if (i < 0 || i >= queue.length) return;
-    _recordProgressNow();
+    _progressTimer?.cancel();
+    _retryTimer?.cancel();
+    await _recordProgressNow(saveSession: false);
+    _restoredPosition = null;
+    _restoredDuration = null;
     index = i;
     _notify();
     await _openCurrent();
@@ -294,7 +310,11 @@ class PlaybackController extends ChangeNotifier {
 
   Future<void> next() async {
     if (queue.isEmpty) return;
-    _recordProgressNow();
+    _progressTimer?.cancel();
+    _retryTimer?.cancel();
+    await _recordProgressNow(saveSession: false);
+    _restoredPosition = null;
+    _restoredDuration = null;
     index = _nextIndex();
     _notify();
     await _openCurrent();
@@ -302,7 +322,11 @@ class PlaybackController extends ChangeNotifier {
 
   Future<void> previous() async {
     if (queue.isEmpty) return;
-    _recordProgressNow();
+    _progressTimer?.cancel();
+    _retryTimer?.cancel();
+    await _recordProgressNow(saveSession: false);
+    _restoredPosition = null;
+    _restoredDuration = null;
     index = _prevIndex();
     _notify();
     await _openCurrent();
@@ -355,15 +379,16 @@ class PlaybackController extends ChangeNotifier {
 
   Future<void> _openCurrent({bool isRetry = false, Duration? forceStart}) async {
     final item = current;
-    if (item == null) return;
+    if (item == null || _disposed) return;
     final serial = ++_openSerial;
+    _loadedSerial = -1; // 屏蔽旧媒体的残余流事件，直到新媒体调用 openMedia
+    _retryTimer?.cancel();
+    _progressTimer?.cancel();
+    _handlingError = false;
+    _tempSpeed = null;
     _lastPosition = isRetry ? _retryPosition : Duration.zero;
     _lastDuration = Duration.zero;
     _retryCount = isRetry ? _retryCount : 0;
-    _pendingPrefs = await _db.getTrackPrefs(item.path);
-    _audioPrefApplied = false;
-    _subPrefApplied = false;
-    subDelayMs = _pendingPrefs?.subDelayMs ?? 0;
     audioTracks = [];
     subtitleTracks = [];
     availableExternalSubs = [];
@@ -373,25 +398,44 @@ class PlaybackController extends ChangeNotifier {
     if (!isRetry) status = PlaybackStatus.opening;
     _notify();
 
+    // 先暂停旧媒体流，避免异步查库与请求直链期间旧流继续推进或触发 completed
+    try {
+      await _backend.pause();
+    } catch (_) {}
+    if (serial != _openSerial || _disposed) return;
+
+    await (_bufferProfileInit ?? Future<void>.value());
+    if (serial != _openSerial || _disposed) return;
+
+    _pendingPrefs = await _db.getTrackPrefs(item.path);
+    if (serial != _openSerial || _disposed) return;
+    _audioPrefApplied = false;
+    _subPrefApplied = false;
+    subDelayMs = _pendingPrefs?.subDelayMs ?? 0;
+
+    // 校验来源播单是否仍存在：若已被删除则回退到全局进度模式
+    var playlistId = _sourcePlaylistId;
+    if (playlistId != null && !await _db.playlistExists(playlistId)) {
+      _sourcePlaylistId = null;
+      playlistId = null;
+    }
+    if (serial != _openSerial || _disposed) return;
+
     // 起始位置：重试→最近位置（绝不回片头）；会话恢复→forceStart；
     // 否则读进度续播（播单播放读该播单的独立进度，其它读全局；已看完/≥95% 视为看完从头播）
     Duration? start;
-    final playlistId = _sourcePlaylistId;
     if (isRetry) {
-      start = _retryPosition;
+      start = _retryPosition > Duration.zero ? _retryPosition : null;
     } else if (forceStart != null) {
       start = forceStart;
     } else {
-      // 播单来源读该播单的独立进度，其它读全局进度
       if (playlistId != null) {
         final p = await _db.getPlaylistProgress(playlistId, item.path);
         if (p != null) {
           final pos = Duration(milliseconds: p.positionMs);
           final dur = Duration(milliseconds: p.durationMs);
-          if (p.finished || ProgressRules.isFinished(pos, dur)) {
-            // 上次在本播单里已看完：清掉记录，从头播
-            await _db.clearPlaylistProgress(playlistId, item.path);
-          } else {
+          // 已看完时从头播（start = null），不提前删行，以免打开失败或误触退出丢失"已看完"标记
+          if (!p.finished && !ProgressRules.isFinished(pos, dur) && pos > Duration.zero) {
             start = pos;
           }
         }
@@ -400,7 +444,9 @@ class PlaybackController extends ChangeNotifier {
         if (p != null) {
           final pos = Duration(milliseconds: p.positionMs);
           final dur = Duration(milliseconds: p.durationMs);
-          if (!ProgressRules.isFinished(pos, dur)) start = pos;
+          if (!ProgressRules.isFinished(pos, dur) && pos > Duration.zero) {
+            start = pos;
+          }
         }
       }
     }
@@ -409,44 +455,45 @@ class PlaybackController extends ChangeNotifier {
       if (serial != _openSerial || _disposed) return;
       // 播单来源：更新续播指针（"本播单上次播到这个文件"），详情页"继续播放"据此定位到具体条目
       if (playlistId != null) {
-        await _writePlaylist(() => _db.setPlaylistLastPlayed(playlistId, item.path));
+        await _writePlaylist(() => _db.setPlaylistLastPlayed(playlistId!, item.path));
         if (serial != _openSerial || _disposed) return;
       }
       final link = await _api().getFileLink(item.path);
       if (serial != _openSerial || _disposed) return;
-      debugPrint('[OLP] open: ${link.url}');
-      debugPrint('[OLP] headers: ${link.headers} start: $start');
-      await _player.open(
-        Media(
-          link.url,
-          httpHeaders: link.headers,
-          start: start,
-        ),
+      if (kDebugMode) {
+        final safeUri = Uri.tryParse(link.url);
+        final hostInfo = safeUri != null ? '${safeUri.scheme}://${safeUri.authority}${safeUri.path}' : item.name;
+        debugPrint('[OLP] open: $hostInfo headerKeys=${link.headers.keys.toList()} start=$start');
+      }
+      if (start != null && start > Duration.zero) {
+        _lastPosition = start;
+      }
+      _loadedSerial = serial;
+      await _backend.openMedia(
+        link.url,
+        headers: link.headers,
+        start: start,
         play: true,
       );
       if (serial != _openSerial || _disposed) return;
-      await _player.setRate(_speed);
+      await _backend.setRate(_speed);
       await _applySubDelay();
-      // TODO(debug): 纹理绑定诊断，发布前移除
-      Future.delayed(const Duration(seconds: 2), () {
-        debugPrint('[OLP] textureId=${_videoController.id.value}');
-      });
       unawaited(_attachExternalSubs(serial, item)); // 不阻塞开播
       _startProgressTimer();
       await _db.touchHistory(item);
-      unawaited(_saveSessionNow());
+      await _saveSessionNow();
     } catch (e) {
       if (serial != _openSerial || _disposed) return;
       // 打开失败（直链获取失败等）走同一重试策略
-      _onOpenFailure(e);
+      _onOpenFailure(serial, e);
     }
   }
 
   Duration _retryPosition = Duration.zero;
 
-  void _onOpenFailure(Object e) {
+  void _onOpenFailure(int serial, Object e) {
     _retryPosition = _lastPosition;
-    _onPlayerError('打开失败: $e');
+    unawaited(_onPlayerError('打开失败: $e', serial: serial));
   }
 
   Future<void> _attachExternalSubs(int serial, QueueItem item) async {
@@ -459,9 +506,7 @@ class PlaybackController extends ChangeNotifier {
       availableExternalSubs = names.where(isSubtitleFile).toList()..sort(compareNatural);
       _notify();
       if (matches.isEmpty) return;
-      final np = _player.platform;
-      if (np is! NativePlayer) return;
-      final hasEmbedded = _player.state.tracks.subtitle
+      final hasEmbedded = _backend.currentTracks.subtitle
           .any((t) => t.id != 'auto' && t.id != 'no' && !t.uri);
       final noSubPref = _pendingPrefs?.subtitleTrack == null;
       for (var i = 0; i < matches.length; i++) {
@@ -470,8 +515,9 @@ class PlaybackController extends ChangeNotifier {
         if (serial != _openSerial || _disposed) return;
         // 第一个匹配：无内置字幕且无记忆选择时直接选中
         final flag = (i == 0 && !hasEmbedded && noSubPref && !_subPrefApplied) ? 'select' : 'auto';
-        await np.command(['sub-add', link.url, flag, subName]);
+        await _backend.addExternalSub(link.url, flag, subName, headers: link.headers);
       }
+      if (serial != _openSerial || _disposed) return;
       _maybeApplyTrackPrefs();
     } catch (_) {
       // 外挂字幕失败不影响播放
@@ -504,32 +550,42 @@ class PlaybackController extends ChangeNotifier {
   }
 
   void _syncCurrentTracks() {
-    final sel = _player.state.track;
+    final sel = _backend.currentTrack;
     currentAudio = audioTracks.where((t) => t.id == sel.audio.id).firstOrNull;
-    currentSubtitle = subtitleTracks.where((t) => t.id == sel.subtitle.id).firstOrNull;
+    currentSubtitle = subtitleTracks.where((t) => t.id == sel.subtitle.id).firstOrNull ??
+        (sel.subtitle.title != null
+            ? subtitleTracks.where((t) => t.title == sel.subtitle.title).firstOrNull
+            : null);
   }
 
   void _maybeApplyTrackPrefs() {
     final item = current;
     final prefs = _pendingPrefs;
     if (item == null || prefs == null) return;
-    final tracks = _player.state.tracks;
+    final tracks = _backend.currentTracks;
     if (!_audioPrefApplied && prefs.audioTrack != null) {
       final match = tracks.audio
           .where((x) => (x.title ?? x.language ?? x.id) == prefs.audioTrack)
           .firstOrNull;
       if (match != null) {
         _audioPrefApplied = true;
-        _player.setAudioTrack(match);
+        unawaited(_backend.setAudioTrack(match));
       }
     }
     if (!_subPrefApplied && prefs.subtitleTrack != null) {
-      final match = tracks.subtitle
-          .where((x) => (x.title ?? x.language ?? x.id) == prefs.subtitleTrack)
-          .firstOrNull;
-      if (match != null) {
+      if (prefs.subtitleTrack!.isEmpty) {
+        // 用户上次显式关闭了字幕：强制关闭以压制内置默认字幕
         _subPrefApplied = true;
-        _player.setSubtitleTrack(match);
+        currentSubtitle = null;
+        unawaited(_backend.setSubtitleTrack(SubtitleTrack.no()));
+      } else {
+        final match = tracks.subtitle
+            .where((x) => (x.title ?? x.language ?? x.id) == prefs.subtitleTrack)
+            .firstOrNull;
+        if (match != null) {
+          _subPrefApplied = true;
+          unawaited(_backend.setSubtitleTrack(match));
+        }
       }
     }
     // 无任何字幕偏好且无内置字幕时，外挂加载完后选第一个（_attachExternalSubs 已处理 select）
@@ -538,9 +594,10 @@ class PlaybackController extends ChangeNotifier {
   }
 
   Future<void> selectAudioTrack(TrackDesc t) async {
-    final match = _player.state.tracks.audio.where((x) => x.id == t.id).firstOrNull;
+    final match = _backend.currentTracks.audio.where((x) => x.id == t.id).firstOrNull;
     if (match == null) return;
-    await _player.setAudioTrack(match);
+    await _backend.setAudioTrack(match);
+    currentAudio = audioTracks.where((x) => x.id == t.id).firstOrNull ?? t;
     final item = current;
     if (item != null) {
       await _db.saveTrackPrefs(item.path, audioTrack: _trackKeyOfDesc(t));
@@ -550,12 +607,13 @@ class PlaybackController extends ChangeNotifier {
 
   Future<void> selectSubtitleTrack(TrackDesc? t) async {
     if (t == null) {
-      await _player.setSubtitleTrack(SubtitleTrack.no());
+      await _backend.setSubtitleTrack(SubtitleTrack.no());
       currentSubtitle = null;
     } else {
-      final match = _player.state.tracks.subtitle.where((x) => x.id == t.id).firstOrNull;
+      final match = _backend.currentTracks.subtitle.where((x) => x.id == t.id).firstOrNull;
       if (match == null) return;
-      await _player.setSubtitleTrack(match);
+      await _backend.setSubtitleTrack(match);
+      currentSubtitle = subtitleTracks.where((x) => x.id == t.id).firstOrNull ?? t;
     }
     final item = current;
     if (item != null) {
@@ -566,13 +624,18 @@ class PlaybackController extends ChangeNotifier {
 
   String _trackKeyOfDesc(TrackDesc t) => t.title ?? t.language ?? t.id;
 
-  /// 手动加载同目录某字幕文件（选中并记忆）
+  /// 手动加载同目录某字幕文件（携带直链 headers 选中并记忆）
   Future<void> addExternalSubtitle(String fileName) async {
     final item = current;
     if (item == null) return;
+    final serial = _openSerial;
     final link = await _api().getFileLink(joinPath(item.parent, fileName));
-    await _player.setSubtitleTrack(SubtitleTrack.uri(link.url, title: fileName));
+    if (serial != _openSerial || _disposed || current?.path != item.path) return;
+    await _backend.addExternalSub(link.url, 'select', fileName, headers: link.headers);
     await _db.saveTrackPrefs(item.path, subtitleTrack: fileName);
+    // 先乐观展示选中态，待 mpv 解析完 track-list / sid 后由 _updateTracks 自动对齐真实轨道 id
+    currentSubtitle = subtitleTracks.where((t) => t.title == fileName).firstOrNull ??
+        TrackDesc(id: link.url, title: fileName, language: null, isExternal: true);
     _notify();
   }
 
@@ -586,34 +649,35 @@ class PlaybackController extends ChangeNotifier {
     _notify();
   }
 
-  Future<void> _applySubDelay() async {
-    final np = _player.platform;
-    if (np is! NativePlayer) return;
-    await np.setProperty('sub-delay', '${subDelayMs / 1000.0}');
-  }
+  Future<void> _applySubDelay() => _backend.setSubDelaySeconds(subDelayMs / 1000.0);
 
   // ---------- 倍速 ----------
 
   Future<void> setSpeed(double s) async {
     _speed = s;
-    await _player.setRate(s);
+    _tempSpeed = null;
+    await _backend.setRate(s);
     _notify();
   }
 
   /// 长按临时 3x：松开后恢复
   Future<void> setTemporarySpeed(double s) async {
-    await _player.setRate(s);
+    _tempSpeed = s;
+    await _backend.setRate(s);
     _notify();
   }
 
   Future<void> restoreSpeed() async {
-    await _player.setRate(_speed);
+    if (_tempSpeed == null) return;
+    _tempSpeed = null;
+    await _backend.setRate(_speed);
     _notify();
   }
 
   Future<void> persistSpeed(double s) async {
     _speed = s;
-    await _player.setRate(s);
+    _tempSpeed = null;
+    await _backend.setRate(s);
     await _persistSpeedCb?.call(s);
     _notify();
   }
@@ -625,17 +689,22 @@ class PlaybackController extends ChangeNotifier {
       await retryNow();
       return;
     }
-    if (_player.state.playing) {
-      await _player.pause();
+    if (status == PlaybackStatus.idle && current != null) {
+      await resumeSession();
+      return;
+    }
+    if (_backend.isPlaying) {
+      await _backend.pause();
     } else {
-      await _player.play();
+      await _backend.play();
     }
   }
 
   Future<void> seek(Duration position) async {
-    await _player.seek(position);
+    await _backend.seek(position);
     _lastPosition = position;
     unawaited(_saveSessionNow());
+    _notify();
   }
 
   Future<void> seekRelative(int seconds) async {
@@ -653,27 +722,32 @@ class PlaybackController extends ChangeNotifier {
   }
 
   Future<void> setVolume(double v) async {
-    await _player.setVolume(v.clamp(0, 100));
+    await _backend.setVolume(v.clamp(0, 100));
     _notify();
   }
 
-  double get volume => _player.state.volume;
+  double get volume => _backend.currentVolume;
 
   // ---------- 完成与错误 ----------
 
   Future<void> _onCompleted() async {
+    final serial = _openSerial;
     final item = current;
-    if (item == null) return;
-    // 看完：清进度（下次从头）+ 记历史
+    if (item == null || serial != _loadedSerial) return;
+    _progressTimer?.cancel();
+    // 看完：清全局进度（下次从头）+ 播单标已看完 + 记历史
     await _db.clearProgress(item.path);
     final playlistId = _sourcePlaylistId;
-    if (playlistId != null) {
+    if (playlistId != null && _lastDuration > Duration.zero) {
       await _writePlaylist(() => _db.markPlaylistProgressFinished(playlistId, item.path, _lastDuration));
     }
     await _db.touchHistory(item);
+    if (serial != _openSerial || _disposed) return;
     if (mode == PlayMode.repeatOne) {
-      await _player.seek(Duration.zero);
-      await _player.play();
+      _lastPosition = Duration.zero;
+      await _backend.seek(Duration.zero);
+      await _backend.play();
+      _startProgressTimer();
       return;
     }
     if (queue.length > 1 || (index < queue.length - 1)) {
@@ -684,30 +758,40 @@ class PlaybackController extends ChangeNotifier {
       await _openCurrent();
     } else if (queue.length == 1) {
       // 单曲队列播完：停在开头
-      await _player.seek(Duration.zero);
-      await _player.pause();
+      _lastPosition = Duration.zero;
+      await _backend.seek(Duration.zero);
+      await _backend.pause();
+      unawaited(_saveSessionNow());
     }
   }
 
-  Future<void> _onPlayerError(String e) async {
-    if (current == null || _disposed) return;
+  Future<void> _onPlayerError(String e, {int? serial}) async {
+    final activeSerial = serial ?? _openSerial;
+    if (current == null || _disposed || activeSerial != _openSerial) return;
+    if (_handlingError) return; // 避免 open 抛错与 stream.error 双通道重复计数
     if (status != PlaybackStatus.playing &&
         status != PlaybackStatus.buffering &&
         status != PlaybackStatus.paused &&
         status != PlaybackStatus.opening) {
       return;
     }
+    _handlingError = true;
     _retryPosition = _lastPosition;
     if (_retryCount < 2) {
       _retryCount++;
       status = PlaybackStatus.buffering; // UI 显示"重连中"
       errorText = null;
       _notify();
-      // 从最近位置重取直链断点重连
-      await Future<void>.delayed(const Duration(milliseconds: 800));
-      if (_disposed) return;
-      await _openCurrent(isRetry: true);
+      // 从最近位置重取直链断点重连（可取消 Timer，切歌/停止/销毁时立即终止）
+      _retryTimer?.cancel();
+      _retryTimer = Timer(const Duration(milliseconds: 800), () {
+        _handlingError = false;
+        if (_disposed || activeSerial != _openSerial || status == PlaybackStatus.idle) return;
+        unawaited(_openCurrent(isRetry: true));
+      });
     } else {
+      _handlingError = false;
+      _progressTimer?.cancel();
       status = PlaybackStatus.error;
       errorText = '播放失败：$e';
       _notify();
@@ -716,6 +800,8 @@ class PlaybackController extends ChangeNotifier {
 
   /// 用户手动重试（错误页按钮）
   Future<void> retryNow() async {
+    _retryTimer?.cancel();
+    _handlingError = false;
     _retryCount = 0;
     _retryPosition = _lastPosition;
     await _openCurrent(isRetry: true);
@@ -723,6 +809,8 @@ class PlaybackController extends ChangeNotifier {
 
   /// 用户手动跳过（错误页按钮）：跳下一曲
   Future<void> skipAfterError() async {
+    _retryTimer?.cancel();
+    _handlingError = false;
     _retryCount = 0;
     if (queue.length <= 1) {
       await stop();
@@ -735,9 +823,13 @@ class PlaybackController extends ChangeNotifier {
 
   Future<void> stop() async {
     _openSerial++;
+    _loadedSerial = -1;
+    _retryTimer?.cancel();
     _progressTimer?.cancel();
+    _handlingError = false;
+    _tempSpeed = null;
     await _recordProgressNow();
-    await _player.stop();
+    await _backend.stop();
     status = PlaybackStatus.idle;
     _notify();
   }
@@ -749,42 +841,55 @@ class PlaybackController extends ChangeNotifier {
     _progressTimer = Timer.periodic(const Duration(seconds: 5), (_) => _recordProgressNow());
   }
 
-  Future<void> _recordProgressNow() async {
+  Future<void> _recordProgressNow({bool saveSession = true}) async {
     final item = current;
     if (item == null) return;
     final pos = _lastPosition;
     final dur = _lastDuration;
-    if (!ProgressRules.shouldRecord(dur)) return;
     final playlistId = _sourcePlaylistId;
-    if (ProgressRules.isFinished(pos, dur)) {
-      await _db.clearProgress(item.path);
-      // 播单进度保留"已看完"行（详情页展示 + 续播时跳过）；全局进度仍是看完即删
-      if (playlistId != null) {
-        await _writePlaylist(() => _db.markPlaylistProgressFinished(playlistId, item.path, dur));
-      }
-    } else if (pos > Duration.zero) {
-      await _db.upsertProgress(item.path, pos, dur);
-      // 播单来源：同一文件在各自播单独立记录断点
-      if (playlistId != null) {
-        await _writePlaylist(() => _db.upsertPlaylistProgress(playlistId, item.path, pos, dur));
+    if (ProgressRules.shouldRecord(dur)) {
+      if (ProgressRules.isFinished(pos, dur)) {
+        await _db.clearProgress(item.path);
+        // 播单进度保留"已看完"行（详情页展示 + 续播时跳过）；全局进度仍是看完即删
+        if (playlistId != null) {
+          await _writePlaylist(() => _db.markPlaylistProgressFinished(playlistId, item.path, dur));
+        }
+      } else if (pos > Duration.zero) {
+        await _db.upsertProgress(item.path, pos, dur);
+        // 播单来源：同一文件在各自播单独立记录断点
+        if (playlistId != null) {
+          await _writePlaylist(() => _db.upsertPlaylistProgress(playlistId, item.path, pos, dur));
+        }
       }
     }
-    unawaited(_saveSessionNow());
+    if (saveSession) {
+      await _saveSessionNow();
+    }
   }
 
   Future<void> _saveSessionNow() async {
     final item = current;
     if (item == null) return;
-    await _db.saveSession(queue, index, _lastPosition, sourcePlaylistId: _sourcePlaylistId);
+    await _db.saveSession(
+      queue,
+      index,
+      _lastPosition,
+      duration: _lastDuration,
+      sourcePlaylistId: _sourcePlaylistId,
+    );
   }
 
   /// 播单进度 / 续播指针是附属记录：写失败不能影响播放和全局进度。
-  /// 例如播单在播放途中被删除，外键约束会拒绝后续写入。
+  /// 例如播单在播放途中被删除，外键约束会拒绝后续写入，此时自动回退为全局进度模式。
   Future<void> _writePlaylist(Future<void> Function() write) async {
     try {
       await write();
     } catch (e) {
       debugPrint('[OLP] playlist write skipped: $e');
+      final pid = _sourcePlaylistId;
+      if (pid != null && !await _db.playlistExists(pid)) {
+        _sourcePlaylistId = null;
+      }
     }
   }
 
@@ -794,28 +899,49 @@ class PlaybackController extends ChangeNotifier {
   Future<void> restoreSession() async {
     final s = await _db.loadSession();
     if (s == null) return;
+    var playlistId = s.sourcePlaylistId;
+    if (playlistId != null && !await _db.playlistExists(playlistId)) {
+      playlistId = null;
+    }
     queue = s.queue;
     index = s.index;
-    _sourcePlaylistId = s.sourcePlaylistId;
+    _sourcePlaylistId = playlistId;
     _restoredPosition = s.position;
+    _restoredDuration = s.duration;
     _lastPosition = s.position;
+    _lastDuration = s.duration;
     _notify();
   }
 
   Duration? _restoredPosition;
+  Duration? _restoredDuration;
 
   /// 继续/开始播放恢复的会话
   Future<void> resumeSession() async {
     final item = current;
     if (item == null) return;
     final pos = _restoredPosition;
+    final savedDur = _restoredDuration ?? Duration.zero;
     _restoredPosition = null;
+    _restoredDuration = null;
     if (pos != null && pos > Duration.zero && status == PlaybackStatus.idle) {
-      final playlistId = _sourcePlaylistId;
-      final durMs = playlistId != null
+      var playlistId = _sourcePlaylistId;
+      if (playlistId != null && !await _db.playlistExists(playlistId)) {
+        _sourcePlaylistId = null;
+        playlistId = null;
+      }
+      var durMs = playlistId != null
           ? (await _db.getPlaylistProgress(playlistId, item.path))?.durationMs ?? 0
           : (await _db.getProgress(item.path))?.durationMs ?? 0;
-      if (durMs > 0 && pos.inMilliseconds / durMs < 0.95) {
+      if (durMs <= 0 && savedDur > Duration.zero) {
+        durMs = savedDur.inMilliseconds;
+      }
+      if (durMs > 0 && pos.inMilliseconds / durMs < ProgressRules.finishedThreshold) {
+        await _openCurrent(forceStart: pos);
+        return;
+      }
+      if (durMs <= 0) {
+        // 首次打开尚未解析出总时长就拖动保存了断点：直接信任会话保存的位置续播
         await _openCurrent(forceStart: pos);
         return;
       }

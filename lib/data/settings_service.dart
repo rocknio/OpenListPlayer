@@ -54,10 +54,13 @@ class SettingsService {
   static const _kSpeed = 'play.global_speed';
 
   AppSettings load() {
-    final url = _prefs.getString(_kSiteUrl);
-    final site = (url == null || url.isEmpty)
+    final rawUrl = _prefs.getString(_kSiteUrl);
+    final url = rawUrl == null ? null : SiteConfig.tryNormalizeUrl(rawUrl);
+    final site = url == null
         ? null
         : SiteConfig(baseUrl: url, name: _prefs.getString(_kSiteName));
+    final rawSpeed = _prefs.getDouble(_kSpeed) ?? 1.0;
+    final speed = rawSpeed.isFinite && rawSpeed > 0 ? rawSpeed.clamp(0.25, 4.0) : 1.0;
     return AppSettings(
       site: site,
       sortMode: _enumFromString(SortMode.values, _prefs.getString(_kSort), SortMode.natural),
@@ -66,19 +69,16 @@ class SettingsService {
       videoBackgroundAudio: _prefs.getBool(_kVideoBgAudio) ?? true,
       bufferProfile:
           _enumFromString(BufferProfile.values, _prefs.getString(_kBuffer), BufferProfile.balanced),
-      globalSpeed: _prefs.getDouble(_kSpeed) ?? 1.0,
+      globalSpeed: speed,
     );
   }
 
   Future<void> saveSite(SiteConfig? site) async {
-    if (site == null) {
+    final url = site == null ? null : SiteConfig.tryNormalizeUrl(site.baseUrl);
+    if (site == null || url == null) {
       await _prefs.remove(_kSiteUrl);
       await _prefs.remove(_kSiteName);
       return;
-    }
-    var url = site.baseUrl.trim();
-    while (url.endsWith('/')) {
-      url = url.substring(0, url.length - 1);
     }
     await _prefs.setString(_kSiteUrl, url);
     final name = site.name?.trim() ?? '';

@@ -328,6 +328,16 @@ class $PlaylistItemsTable extends PlaylistItems
     requiredDuringInsert: false,
     defaultValue: const Constant(0),
   );
+  static const VerificationMeta _thumbMeta = const VerificationMeta('thumb');
+  @override
+  late final GeneratedColumn<String> thumb = GeneratedColumn<String>(
+    'thumb',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+    defaultValue: const Constant(''),
+  );
   static const VerificationMeta _positionMeta = const VerificationMeta(
     'position',
   );
@@ -347,6 +357,7 @@ class $PlaylistItemsTable extends PlaylistItems
     name,
     isVideo,
     size,
+    thumb,
     position,
   ];
   @override
@@ -402,6 +413,12 @@ class $PlaylistItemsTable extends PlaylistItems
         size.isAcceptableOrUnknown(data['size']!, _sizeMeta),
       );
     }
+    if (data.containsKey('thumb')) {
+      context.handle(
+        _thumbMeta,
+        thumb.isAcceptableOrUnknown(data['thumb']!, _thumbMeta),
+      );
+    }
     if (data.containsKey('position')) {
       context.handle(
         _positionMeta,
@@ -443,6 +460,10 @@ class $PlaylistItemsTable extends PlaylistItems
         DriftSqlType.int,
         data['${effectivePrefix}size'],
       )!,
+      thumb: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}thumb'],
+      )!,
       position: attachedDatabase.typeMapping.read(
         DriftSqlType.int,
         data['${effectivePrefix}position'],
@@ -463,6 +484,7 @@ class PlaylistItem extends DataClass implements Insertable<PlaylistItem> {
   final String name;
   final bool isVideo;
   final int size;
+  final String thumb;
   final int position;
   const PlaylistItem({
     required this.id,
@@ -471,6 +493,7 @@ class PlaylistItem extends DataClass implements Insertable<PlaylistItem> {
     required this.name,
     required this.isVideo,
     required this.size,
+    required this.thumb,
     required this.position,
   });
   @override
@@ -482,6 +505,7 @@ class PlaylistItem extends DataClass implements Insertable<PlaylistItem> {
     map['name'] = Variable<String>(name);
     map['is_video'] = Variable<bool>(isVideo);
     map['size'] = Variable<int>(size);
+    map['thumb'] = Variable<String>(thumb);
     map['position'] = Variable<int>(position);
     return map;
   }
@@ -494,6 +518,7 @@ class PlaylistItem extends DataClass implements Insertable<PlaylistItem> {
       name: Value(name),
       isVideo: Value(isVideo),
       size: Value(size),
+      thumb: Value(thumb),
       position: Value(position),
     );
   }
@@ -510,6 +535,7 @@ class PlaylistItem extends DataClass implements Insertable<PlaylistItem> {
       name: serializer.fromJson<String>(json['name']),
       isVideo: serializer.fromJson<bool>(json['isVideo']),
       size: serializer.fromJson<int>(json['size']),
+      thumb: serializer.fromJson<String>(json['thumb']),
       position: serializer.fromJson<int>(json['position']),
     );
   }
@@ -523,6 +549,7 @@ class PlaylistItem extends DataClass implements Insertable<PlaylistItem> {
       'name': serializer.toJson<String>(name),
       'isVideo': serializer.toJson<bool>(isVideo),
       'size': serializer.toJson<int>(size),
+      'thumb': serializer.toJson<String>(thumb),
       'position': serializer.toJson<int>(position),
     };
   }
@@ -534,6 +561,7 @@ class PlaylistItem extends DataClass implements Insertable<PlaylistItem> {
     String? name,
     bool? isVideo,
     int? size,
+    String? thumb,
     int? position,
   }) => PlaylistItem(
     id: id ?? this.id,
@@ -542,6 +570,7 @@ class PlaylistItem extends DataClass implements Insertable<PlaylistItem> {
     name: name ?? this.name,
     isVideo: isVideo ?? this.isVideo,
     size: size ?? this.size,
+    thumb: thumb ?? this.thumb,
     position: position ?? this.position,
   );
   PlaylistItem copyWithCompanion(PlaylistItemsCompanion data) {
@@ -554,6 +583,7 @@ class PlaylistItem extends DataClass implements Insertable<PlaylistItem> {
       name: data.name.present ? data.name.value : this.name,
       isVideo: data.isVideo.present ? data.isVideo.value : this.isVideo,
       size: data.size.present ? data.size.value : this.size,
+      thumb: data.thumb.present ? data.thumb.value : this.thumb,
       position: data.position.present ? data.position.value : this.position,
     );
   }
@@ -567,6 +597,7 @@ class PlaylistItem extends DataClass implements Insertable<PlaylistItem> {
           ..write('name: $name, ')
           ..write('isVideo: $isVideo, ')
           ..write('size: $size, ')
+          ..write('thumb: $thumb, ')
           ..write('position: $position')
           ..write(')'))
         .toString();
@@ -574,7 +605,7 @@ class PlaylistItem extends DataClass implements Insertable<PlaylistItem> {
 
   @override
   int get hashCode =>
-      Object.hash(id, playlistId, path, name, isVideo, size, position);
+      Object.hash(id, playlistId, path, name, isVideo, size, thumb, position);
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
@@ -585,6 +616,7 @@ class PlaylistItem extends DataClass implements Insertable<PlaylistItem> {
           other.name == this.name &&
           other.isVideo == this.isVideo &&
           other.size == this.size &&
+          other.thumb == this.thumb &&
           other.position == this.position);
 }
 
@@ -595,6 +627,7 @@ class PlaylistItemsCompanion extends UpdateCompanion<PlaylistItem> {
   final Value<String> name;
   final Value<bool> isVideo;
   final Value<int> size;
+  final Value<String> thumb;
   final Value<int> position;
   const PlaylistItemsCompanion({
     this.id = const Value.absent(),
@@ -603,6 +636,7 @@ class PlaylistItemsCompanion extends UpdateCompanion<PlaylistItem> {
     this.name = const Value.absent(),
     this.isVideo = const Value.absent(),
     this.size = const Value.absent(),
+    this.thumb = const Value.absent(),
     this.position = const Value.absent(),
   });
   PlaylistItemsCompanion.insert({
@@ -612,6 +646,7 @@ class PlaylistItemsCompanion extends UpdateCompanion<PlaylistItem> {
     required String name,
     required bool isVideo,
     this.size = const Value.absent(),
+    this.thumb = const Value.absent(),
     required int position,
   }) : playlistId = Value(playlistId),
        path = Value(path),
@@ -625,6 +660,7 @@ class PlaylistItemsCompanion extends UpdateCompanion<PlaylistItem> {
     Expression<String>? name,
     Expression<bool>? isVideo,
     Expression<int>? size,
+    Expression<String>? thumb,
     Expression<int>? position,
   }) {
     return RawValuesInsertable({
@@ -634,6 +670,7 @@ class PlaylistItemsCompanion extends UpdateCompanion<PlaylistItem> {
       if (name != null) 'name': name,
       if (isVideo != null) 'is_video': isVideo,
       if (size != null) 'size': size,
+      if (thumb != null) 'thumb': thumb,
       if (position != null) 'position': position,
     });
   }
@@ -645,6 +682,7 @@ class PlaylistItemsCompanion extends UpdateCompanion<PlaylistItem> {
     Value<String>? name,
     Value<bool>? isVideo,
     Value<int>? size,
+    Value<String>? thumb,
     Value<int>? position,
   }) {
     return PlaylistItemsCompanion(
@@ -654,6 +692,7 @@ class PlaylistItemsCompanion extends UpdateCompanion<PlaylistItem> {
       name: name ?? this.name,
       isVideo: isVideo ?? this.isVideo,
       size: size ?? this.size,
+      thumb: thumb ?? this.thumb,
       position: position ?? this.position,
     );
   }
@@ -679,6 +718,9 @@ class PlaylistItemsCompanion extends UpdateCompanion<PlaylistItem> {
     if (size.present) {
       map['size'] = Variable<int>(size.value);
     }
+    if (thumb.present) {
+      map['thumb'] = Variable<String>(thumb.value);
+    }
     if (position.present) {
       map['position'] = Variable<int>(position.value);
     }
@@ -694,6 +736,7 @@ class PlaylistItemsCompanion extends UpdateCompanion<PlaylistItem> {
           ..write('name: $name, ')
           ..write('isVideo: $isVideo, ')
           ..write('size: $size, ')
+          ..write('thumb: $thumb, ')
           ..write('position: $position')
           ..write(')'))
         .toString();
@@ -2405,6 +2448,18 @@ class $SessionStateTable extends SessionState
     type: DriftSqlType.int,
     requiredDuringInsert: true,
   );
+  static const VerificationMeta _durationMsMeta = const VerificationMeta(
+    'durationMs',
+  );
+  @override
+  late final GeneratedColumn<int> durationMs = GeneratedColumn<int>(
+    'duration_ms',
+    aliasedName,
+    false,
+    type: DriftSqlType.int,
+    requiredDuringInsert: false,
+    defaultValue: const Constant(0),
+  );
   static const VerificationMeta _sourcePlaylistIdMeta = const VerificationMeta(
     'sourcePlaylistId',
   );
@@ -2434,6 +2489,7 @@ class $SessionStateTable extends SessionState
     queueJson,
     currentIndex,
     positionMs,
+    durationMs,
     sourcePlaylistId,
     savedAt,
   ];
@@ -2479,6 +2535,12 @@ class $SessionStateTable extends SessionState
     } else if (isInserting) {
       context.missing(_positionMsMeta);
     }
+    if (data.containsKey('duration_ms')) {
+      context.handle(
+        _durationMsMeta,
+        durationMs.isAcceptableOrUnknown(data['duration_ms']!, _durationMsMeta),
+      );
+    }
     if (data.containsKey('source_playlist_id')) {
       context.handle(
         _sourcePlaylistIdMeta,
@@ -2519,6 +2581,10 @@ class $SessionStateTable extends SessionState
         DriftSqlType.int,
         data['${effectivePrefix}position_ms'],
       )!,
+      durationMs: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}duration_ms'],
+      )!,
       sourcePlaylistId: attachedDatabase.typeMapping.read(
         DriftSqlType.int,
         data['${effectivePrefix}source_playlist_id'],
@@ -2543,6 +2609,9 @@ class SessionStateData extends DataClass
   final int currentIndex;
   final int positionMs;
 
+  /// 当前曲目已知总时长（毫秒），用于首次未满 5s 即拖动进度条退出后的恢复判定
+  final int durationMs;
+
   /// 会话来源播单 id，用于恢复后继续写入该播单的独立进度
   final int? sourcePlaylistId;
   final DateTime savedAt;
@@ -2551,6 +2620,7 @@ class SessionStateData extends DataClass
     required this.queueJson,
     required this.currentIndex,
     required this.positionMs,
+    required this.durationMs,
     this.sourcePlaylistId,
     required this.savedAt,
   });
@@ -2561,6 +2631,7 @@ class SessionStateData extends DataClass
     map['queue_json'] = Variable<String>(queueJson);
     map['current_index'] = Variable<int>(currentIndex);
     map['position_ms'] = Variable<int>(positionMs);
+    map['duration_ms'] = Variable<int>(durationMs);
     if (!nullToAbsent || sourcePlaylistId != null) {
       map['source_playlist_id'] = Variable<int>(sourcePlaylistId);
     }
@@ -2574,6 +2645,7 @@ class SessionStateData extends DataClass
       queueJson: Value(queueJson),
       currentIndex: Value(currentIndex),
       positionMs: Value(positionMs),
+      durationMs: Value(durationMs),
       sourcePlaylistId: sourcePlaylistId == null && nullToAbsent
           ? const Value.absent()
           : Value(sourcePlaylistId),
@@ -2591,6 +2663,7 @@ class SessionStateData extends DataClass
       queueJson: serializer.fromJson<String>(json['queueJson']),
       currentIndex: serializer.fromJson<int>(json['currentIndex']),
       positionMs: serializer.fromJson<int>(json['positionMs']),
+      durationMs: serializer.fromJson<int>(json['durationMs']),
       sourcePlaylistId: serializer.fromJson<int?>(json['sourcePlaylistId']),
       savedAt: serializer.fromJson<DateTime>(json['savedAt']),
     );
@@ -2603,6 +2676,7 @@ class SessionStateData extends DataClass
       'queueJson': serializer.toJson<String>(queueJson),
       'currentIndex': serializer.toJson<int>(currentIndex),
       'positionMs': serializer.toJson<int>(positionMs),
+      'durationMs': serializer.toJson<int>(durationMs),
       'sourcePlaylistId': serializer.toJson<int?>(sourcePlaylistId),
       'savedAt': serializer.toJson<DateTime>(savedAt),
     };
@@ -2613,6 +2687,7 @@ class SessionStateData extends DataClass
     String? queueJson,
     int? currentIndex,
     int? positionMs,
+    int? durationMs,
     Value<int?> sourcePlaylistId = const Value.absent(),
     DateTime? savedAt,
   }) => SessionStateData(
@@ -2620,6 +2695,7 @@ class SessionStateData extends DataClass
     queueJson: queueJson ?? this.queueJson,
     currentIndex: currentIndex ?? this.currentIndex,
     positionMs: positionMs ?? this.positionMs,
+    durationMs: durationMs ?? this.durationMs,
     sourcePlaylistId: sourcePlaylistId.present
         ? sourcePlaylistId.value
         : this.sourcePlaylistId,
@@ -2635,6 +2711,9 @@ class SessionStateData extends DataClass
       positionMs: data.positionMs.present
           ? data.positionMs.value
           : this.positionMs,
+      durationMs: data.durationMs.present
+          ? data.durationMs.value
+          : this.durationMs,
       sourcePlaylistId: data.sourcePlaylistId.present
           ? data.sourcePlaylistId.value
           : this.sourcePlaylistId,
@@ -2649,6 +2728,7 @@ class SessionStateData extends DataClass
           ..write('queueJson: $queueJson, ')
           ..write('currentIndex: $currentIndex, ')
           ..write('positionMs: $positionMs, ')
+          ..write('durationMs: $durationMs, ')
           ..write('sourcePlaylistId: $sourcePlaylistId, ')
           ..write('savedAt: $savedAt')
           ..write(')'))
@@ -2661,6 +2741,7 @@ class SessionStateData extends DataClass
     queueJson,
     currentIndex,
     positionMs,
+    durationMs,
     sourcePlaylistId,
     savedAt,
   );
@@ -2672,6 +2753,7 @@ class SessionStateData extends DataClass
           other.queueJson == this.queueJson &&
           other.currentIndex == this.currentIndex &&
           other.positionMs == this.positionMs &&
+          other.durationMs == this.durationMs &&
           other.sourcePlaylistId == this.sourcePlaylistId &&
           other.savedAt == this.savedAt);
 }
@@ -2681,6 +2763,7 @@ class SessionStateCompanion extends UpdateCompanion<SessionStateData> {
   final Value<String> queueJson;
   final Value<int> currentIndex;
   final Value<int> positionMs;
+  final Value<int> durationMs;
   final Value<int?> sourcePlaylistId;
   final Value<DateTime> savedAt;
   const SessionStateCompanion({
@@ -2688,6 +2771,7 @@ class SessionStateCompanion extends UpdateCompanion<SessionStateData> {
     this.queueJson = const Value.absent(),
     this.currentIndex = const Value.absent(),
     this.positionMs = const Value.absent(),
+    this.durationMs = const Value.absent(),
     this.sourcePlaylistId = const Value.absent(),
     this.savedAt = const Value.absent(),
   });
@@ -2696,6 +2780,7 @@ class SessionStateCompanion extends UpdateCompanion<SessionStateData> {
     required String queueJson,
     required int currentIndex,
     required int positionMs,
+    this.durationMs = const Value.absent(),
     this.sourcePlaylistId = const Value.absent(),
     this.savedAt = const Value.absent(),
   }) : queueJson = Value(queueJson),
@@ -2706,6 +2791,7 @@ class SessionStateCompanion extends UpdateCompanion<SessionStateData> {
     Expression<String>? queueJson,
     Expression<int>? currentIndex,
     Expression<int>? positionMs,
+    Expression<int>? durationMs,
     Expression<int>? sourcePlaylistId,
     Expression<DateTime>? savedAt,
   }) {
@@ -2714,6 +2800,7 @@ class SessionStateCompanion extends UpdateCompanion<SessionStateData> {
       if (queueJson != null) 'queue_json': queueJson,
       if (currentIndex != null) 'current_index': currentIndex,
       if (positionMs != null) 'position_ms': positionMs,
+      if (durationMs != null) 'duration_ms': durationMs,
       if (sourcePlaylistId != null) 'source_playlist_id': sourcePlaylistId,
       if (savedAt != null) 'saved_at': savedAt,
     });
@@ -2724,6 +2811,7 @@ class SessionStateCompanion extends UpdateCompanion<SessionStateData> {
     Value<String>? queueJson,
     Value<int>? currentIndex,
     Value<int>? positionMs,
+    Value<int>? durationMs,
     Value<int?>? sourcePlaylistId,
     Value<DateTime>? savedAt,
   }) {
@@ -2732,6 +2820,7 @@ class SessionStateCompanion extends UpdateCompanion<SessionStateData> {
       queueJson: queueJson ?? this.queueJson,
       currentIndex: currentIndex ?? this.currentIndex,
       positionMs: positionMs ?? this.positionMs,
+      durationMs: durationMs ?? this.durationMs,
       sourcePlaylistId: sourcePlaylistId ?? this.sourcePlaylistId,
       savedAt: savedAt ?? this.savedAt,
     );
@@ -2752,6 +2841,9 @@ class SessionStateCompanion extends UpdateCompanion<SessionStateData> {
     if (positionMs.present) {
       map['position_ms'] = Variable<int>(positionMs.value);
     }
+    if (durationMs.present) {
+      map['duration_ms'] = Variable<int>(durationMs.value);
+    }
     if (sourcePlaylistId.present) {
       map['source_playlist_id'] = Variable<int>(sourcePlaylistId.value);
     }
@@ -2768,6 +2860,7 @@ class SessionStateCompanion extends UpdateCompanion<SessionStateData> {
           ..write('queueJson: $queueJson, ')
           ..write('currentIndex: $currentIndex, ')
           ..write('positionMs: $positionMs, ')
+          ..write('durationMs: $durationMs, ')
           ..write('sourcePlaylistId: $sourcePlaylistId, ')
           ..write('savedAt: $savedAt')
           ..write(')'))
@@ -2789,6 +2882,10 @@ abstract class _$AppDatabase extends GeneratedDatabase {
     this,
   );
   late final $SessionStateTable sessionState = $SessionStateTable(this);
+  late final Index idxPlaylistItemsPidPos = Index(
+    'idx_playlist_items_pid_pos',
+    'CREATE INDEX idx_playlist_items_pid_pos ON playlist_items (playlist_id, position)',
+  );
   @override
   Iterable<TableInfo<Table, Object?>> get allTables =>
       allSchemaEntities.whereType<TableInfo<Table, Object?>>();
@@ -2802,6 +2899,7 @@ abstract class _$AppDatabase extends GeneratedDatabase {
     playHistories,
     trackPrefsTable,
     sessionState,
+    idxPlaylistItemsPidPos,
   ];
   @override
   StreamQueryUpdateRules get streamUpdateRules => const StreamQueryUpdateRules([
@@ -3285,6 +3383,7 @@ typedef $$PlaylistItemsTableCreateCompanionBuilder =
       required String name,
       required bool isVideo,
       Value<int> size,
+      Value<String> thumb,
       required int position,
     });
 typedef $$PlaylistItemsTableUpdateCompanionBuilder =
@@ -3295,6 +3394,7 @@ typedef $$PlaylistItemsTableUpdateCompanionBuilder =
       Value<String> name,
       Value<bool> isVideo,
       Value<int> size,
+      Value<String> thumb,
       Value<int> position,
     });
 
@@ -3355,6 +3455,11 @@ class $$PlaylistItemsTableFilterComposer
 
   ColumnFilters<int> get size => $composableBuilder(
     column: $table.size,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get thumb => $composableBuilder(
+    column: $table.thumb,
     builder: (column) => ColumnFilters(column),
   );
 
@@ -3421,6 +3526,11 @@ class $$PlaylistItemsTableOrderingComposer
     builder: (column) => ColumnOrderings(column),
   );
 
+  ColumnOrderings<String> get thumb => $composableBuilder(
+    column: $table.thumb,
+    builder: (column) => ColumnOrderings(column),
+  );
+
   ColumnOrderings<int> get position => $composableBuilder(
     column: $table.position,
     builder: (column) => ColumnOrderings(column),
@@ -3473,6 +3583,9 @@ class $$PlaylistItemsTableAnnotationComposer
 
   GeneratedColumn<int> get size =>
       $composableBuilder(column: $table.size, builder: (column) => column);
+
+  GeneratedColumn<String> get thumb =>
+      $composableBuilder(column: $table.thumb, builder: (column) => column);
 
   GeneratedColumn<int> get position =>
       $composableBuilder(column: $table.position, builder: (column) => column);
@@ -3535,6 +3648,7 @@ class $$PlaylistItemsTableTableManager
                 Value<String> name = const Value.absent(),
                 Value<bool> isVideo = const Value.absent(),
                 Value<int> size = const Value.absent(),
+                Value<String> thumb = const Value.absent(),
                 Value<int> position = const Value.absent(),
               }) => PlaylistItemsCompanion(
                 id: id,
@@ -3543,6 +3657,7 @@ class $$PlaylistItemsTableTableManager
                 name: name,
                 isVideo: isVideo,
                 size: size,
+                thumb: thumb,
                 position: position,
               ),
           createCompanionCallback:
@@ -3553,6 +3668,7 @@ class $$PlaylistItemsTableTableManager
                 required String name,
                 required bool isVideo,
                 Value<int> size = const Value.absent(),
+                Value<String> thumb = const Value.absent(),
                 required int position,
               }) => PlaylistItemsCompanion.insert(
                 id: id,
@@ -3561,6 +3677,7 @@ class $$PlaylistItemsTableTableManager
                 name: name,
                 isVideo: isVideo,
                 size: size,
+                thumb: thumb,
                 position: position,
               ),
           withReferenceMapper: (p0) => p0
@@ -4849,6 +4966,7 @@ typedef $$SessionStateTableCreateCompanionBuilder =
       required String queueJson,
       required int currentIndex,
       required int positionMs,
+      Value<int> durationMs,
       Value<int?> sourcePlaylistId,
       Value<DateTime> savedAt,
     });
@@ -4858,6 +4976,7 @@ typedef $$SessionStateTableUpdateCompanionBuilder =
       Value<String> queueJson,
       Value<int> currentIndex,
       Value<int> positionMs,
+      Value<int> durationMs,
       Value<int?> sourcePlaylistId,
       Value<DateTime> savedAt,
     });
@@ -4888,6 +5007,11 @@ class $$SessionStateTableFilterComposer
 
   ColumnFilters<int> get positionMs => $composableBuilder(
     column: $table.positionMs,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<int> get durationMs => $composableBuilder(
+    column: $table.durationMs,
     builder: (column) => ColumnFilters(column),
   );
 
@@ -4931,6 +5055,11 @@ class $$SessionStateTableOrderingComposer
     builder: (column) => ColumnOrderings(column),
   );
 
+  ColumnOrderings<int> get durationMs => $composableBuilder(
+    column: $table.durationMs,
+    builder: (column) => ColumnOrderings(column),
+  );
+
   ColumnOrderings<int> get sourcePlaylistId => $composableBuilder(
     column: $table.sourcePlaylistId,
     builder: (column) => ColumnOrderings(column),
@@ -4964,6 +5093,11 @@ class $$SessionStateTableAnnotationComposer
 
   GeneratedColumn<int> get positionMs => $composableBuilder(
     column: $table.positionMs,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<int> get durationMs => $composableBuilder(
+    column: $table.durationMs,
     builder: (column) => column,
   );
 
@@ -5011,6 +5145,7 @@ class $$SessionStateTableTableManager
                 Value<String> queueJson = const Value.absent(),
                 Value<int> currentIndex = const Value.absent(),
                 Value<int> positionMs = const Value.absent(),
+                Value<int> durationMs = const Value.absent(),
                 Value<int?> sourcePlaylistId = const Value.absent(),
                 Value<DateTime> savedAt = const Value.absent(),
               }) => SessionStateCompanion(
@@ -5018,6 +5153,7 @@ class $$SessionStateTableTableManager
                 queueJson: queueJson,
                 currentIndex: currentIndex,
                 positionMs: positionMs,
+                durationMs: durationMs,
                 sourcePlaylistId: sourcePlaylistId,
                 savedAt: savedAt,
               ),
@@ -5027,6 +5163,7 @@ class $$SessionStateTableTableManager
                 required String queueJson,
                 required int currentIndex,
                 required int positionMs,
+                Value<int> durationMs = const Value.absent(),
                 Value<int?> sourcePlaylistId = const Value.absent(),
                 Value<DateTime> savedAt = const Value.absent(),
               }) => SessionStateCompanion.insert(
@@ -5034,6 +5171,7 @@ class $$SessionStateTableTableManager
                 queueJson: queueJson,
                 currentIndex: currentIndex,
                 positionMs: positionMs,
+                durationMs: durationMs,
                 sourcePlaylistId: sourcePlaylistId,
                 savedAt: savedAt,
               ),

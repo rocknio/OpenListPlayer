@@ -39,6 +39,7 @@ class AppPalette {
   static const darkError = Color(0xFFE0775C);
   static const errorContainer = Color(0xFFF4DED6);
   static const darkErrorContainer = Color(0xFF5A2A22);
+  static const onErrorContainer = Color(0xFF7C2D19);
 
   /// 视频控制层遮罩：取墨色的半透明，代替纯黑渐变
   static const scrim = Color(0x66211F1C);
@@ -96,7 +97,7 @@ class AppTheme {
       error: isDark ? AppPalette.darkError : AppPalette.error,
       onError: isDark ? AppPalette.darkBg : Colors.white,
       errorContainer: isDark ? AppPalette.darkErrorContainer : AppPalette.errorContainer,
-      onErrorContainer: isDark ? AppPalette.darkError : const Color(0xFF7C2D19),
+      onErrorContainer: isDark ? AppPalette.darkError : AppPalette.onErrorContainer,
       surfaceTint: Colors.transparent,
     );
 
@@ -134,7 +135,7 @@ class AppTheme {
         color: surface,
         elevation: 0,
         surfaceTintColor: Colors.transparent,
-        shadowColor: const Color(0x14000000),
+        shadowColor: AudioTone.barShadow,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
       ),
       dividerTheme: DividerThemeData(color: sandDeep, thickness: 1),
@@ -222,7 +223,7 @@ class AppTheme {
       ),
       snackBarTheme: SnackBarThemeData(
         backgroundColor: isDark ? surface : ink,
-        contentTextStyle: TextStyle(color: isDark ? AppPalette.darkInk : const Color(0xFFFFFFFF), fontSize: 13),
+        contentTextStyle: TextStyle(color: isDark ? AppPalette.darkInk : AudioTone.surface, fontSize: 13),
         actionTextColor: accent,
         behavior: SnackBarBehavior.floating,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),

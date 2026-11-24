@@ -37,30 +37,52 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
   }
 
   Future<void> _testConnection() async {
-    final url = _urlCtrl.text.trim();
-    if (url.isEmpty) {
+    final raw = _urlCtrl.text.trim();
+    if (raw.isEmpty) {
       setState(() => _testResult = '请输入地址');
+      return;
+    }
+    final normalized = SiteConfig.tryNormalizeUrl(raw);
+    if (normalized == null) {
+      setState(() => _testResult = '地址格式无效，请输入以 http:// 或 https:// 开头的完整地址');
       return;
     }
     setState(() {
       _testing = true;
       _testResult = null;
     });
+    final client = OpenListClient(site: SiteConfig(baseUrl: normalized));
     try {
-      final n = await OpenListClient(site: SiteConfig(baseUrl: url)).testConnection();
+      final n = await client.testConnection();
+      if (!mounted) return;
       setState(() => _testResult = '连接成功，根目录 $n 个条目');
     } catch (e) {
+      if (!mounted) return;
       setState(() => _testResult = '连接失败: $e');
     } finally {
+      client.close();
       if (mounted) setState(() => _testing = false);
     }
   }
 
   Future<void> _saveSite() async {
-    final url = _urlCtrl.text.trim();
+    final raw = _urlCtrl.text.trim();
     final name = _nameCtrl.text.trim();
+    if (raw.isEmpty) {
+      await ref.read(settingsProvider.notifier).setSite(null);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('已清空服务器地址')));
+      }
+      return;
+    }
+    final normalized = SiteConfig.tryNormalizeUrl(raw);
+    if (normalized == null) {
+      setState(() => _testResult = '地址格式无效，请输入以 http:// 或 https:// 开头的完整地址');
+      return;
+    }
+    _urlCtrl.text = normalized;
     await ref.read(settingsProvider.notifier).setSite(
-          url.isEmpty ? null : SiteConfig(baseUrl: url, name: name),
+          SiteConfig(baseUrl: normalized, name: name),
         );
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('已保存服务器地址')));
@@ -111,23 +133,20 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                     ),
                     const SizedBox(width: 12),
                     FilledButton(onPressed: _saveSite, child: const Text('保存')),
-                    if (_testResult != null) ...[
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: Text(
-                          _testResult!,
-                          maxLines: 2,
-                          overflow: TextOverflow.ellipsis,
-                          style: TextStyle(
-                            color: _testResult!.startsWith('连接成功')
-                                ? Theme.of(context).colorScheme.primary
-                                : Theme.of(context).colorScheme.error,
-                          ),
-                        ),
-                      ),
-                    ],
                   ],
                 ),
+                if (_testResult != null) ...[
+                  const SizedBox(height: 8),
+                  Text(
+                    _testResult!,
+                    style: TextStyle(
+                      fontSize: 13,
+                      color: _testResult!.startsWith('连接成功')
+                          ? Theme.of(context).colorScheme.primary
+                          : Theme.of(context).colorScheme.error,
+                    ),
+                  ),
+                ],
               ],
             ),
           ),

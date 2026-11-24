@@ -5,9 +5,8 @@ allprojects {
     }
 }
 
-// media_kit_video 1.2.5 依赖的 volume_controller / screen_brightness_android /
-// media_kit_video 自身 Java 侧还是 1.8，与 app 及 audio_session 的 17 不一致，
-// Gradle 9 的 JVM-target 校验会直接失败。统一强制到 17。
+// media_kit 系及部分设备能力插件（如 screen_brightness_android）Java 侧仍为 1.8，
+// 与 app 及 audio_session 的 17 不一致，Gradle 9 的 JVM-target 校验会直接失败，统一强制到 17。
 val unifiedJavaVersion = JavaVersion.VERSION_17
 subprojects {
     afterEvaluate {
@@ -16,8 +15,7 @@ subprojects {
                 sourceCompatibility = unifiedJavaVersion
                 targetCompatibility = unifiedJavaVersion
             }
-            // media_kit_video 1.2.5 等老插件默认 compileSdk 31，与 wakelock_plus
-            // 等要求 API 36 的插件冲突，统一提升到 36
+            // 部分老插件默认 compileSdk 31，与 wakelock_plus 等要求 API 36 的插件冲突，统一提升到 36
             setCompileSdkVersion(36)
         }
     }

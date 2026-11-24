@@ -1,9 +1,12 @@
 /// audio_service 集成：锁屏/通知栏控件、耳机拔出暂停、来电中断。
 library;
 
+import 'dart:async';
+
 import 'package:audio_service/audio_service.dart';
 import 'package:audio_session/audio_session.dart';
 
+import '../core/models.dart';
 import '../data/settings_service.dart';
 import 'playback_controller.dart';
 
@@ -11,56 +14,97 @@ class PlayerAudioHandler extends BaseAudioHandler {
   PlayerAudioHandler(this._c, {required AppSettings Function() settings})
       : _settings = settings {
     _c.addListener(_onControllerChanged);
-    _c.player.stream.playing.listen((_) => _pushPlaybackState());
-    _c.player.stream.buffering.listen((_) => _pushPlaybackState());
+    _subs.add(_c.playingStream.listen((_) => _pushPlaybackState()));
+    _subs.add(_c.bufferingStream.listen((_) => _pushPlaybackState()));
+    _subs.add(_c.durationStream.listen(_onDurationChanged));
     _initSession();
   }
 
   final PlaybackController _c;
   final AppSettings Function() _settings;
+  final List<StreamSubscription<dynamic>> _subs = [];
+  bool _disposed = false;
   bool _wasPlayingBeforeInterruption = false;
   String? _lastMediaItemId;
 
   Future<void> _initSession() async {
-    final session = await AudioSession.instance;
-    await session.configure(const AudioSessionConfiguration.music());
-    // 耳机/蓝牙拔出：自动暂停
-    session.becomingNoisyEventStream.listen((_) async {
-      if (_c.player.state.playing) await _c.player.pause();
-    });
-    // 来电等中断：暂停（结束后不自动恢复，避免打扰）
-    session.interruptionEventStream.listen((event) async {
-      if (event.begin) {
-        _wasPlayingBeforeInterruption = _c.player.state.playing;
-        if (_wasPlayingBeforeInterruption) await _c.player.pause();
-      } else {
-        _wasPlayingBeforeInterruption = false;
-      }
-    });
+    try {
+      final session = await AudioSession.instance;
+      if (_disposed) return;
+      await session.configure(const AudioSessionConfiguration.music());
+      if (_disposed) return;
+      // 耳机/蓝牙拔出：自动暂停
+      _subs.add(session.becomingNoisyEventStream.listen((_) async {
+        if (_c.isPlaying) await pause();
+      }));
+      // 来电等中断：暂停（结束后不自动恢复，避免打扰）
+      _subs.add(session.interruptionEventStream.listen((event) async {
+        if (event.begin) {
+          _wasPlayingBeforeInterruption = _c.isPlaying;
+          if (_wasPlayingBeforeInterruption) await pause();
+        } else {
+          _wasPlayingBeforeInterruption = false;
+        }
+      }));
+    } catch (_) {
+      // 测试环境无原生插件时忽略
+    }
+  }
+
+  void dispose() {
+    _disposed = true;
+    _c.removeListener(_onControllerChanged);
+    for (final s in _subs) {
+      s.cancel();
+    }
+    _subs.clear();
   }
 
   void _onControllerChanged() {
+    if (_disposed) return;
     final item = _c.current;
-    if (item == null) return;
+    if (item == null) {
+      _lastMediaItemId = null;
+      _pushPlaybackState();
+      return;
+    }
+    final dur = _c.currentDuration;
     if (_lastMediaItemId != item.path) {
       _lastMediaItemId = item.path;
-      final dur = _c.player.state.duration;
-      mediaItem.add(MediaItem(
-        id: item.path,
-        title: item.name,
-        duration: dur > Duration.zero ? dur : null,
-        playable: true,
-      ));
+      mediaItem.add(_buildMediaItem(item, dur));
+    } else if (dur > Duration.zero && mediaItem.value?.duration != dur) {
+      mediaItem.add(_buildMediaItem(item, dur));
     }
     _pushPlaybackState();
   }
 
+  void _onDurationChanged(Duration dur) {
+    if (_disposed || dur <= Duration.zero) return;
+    final item = _c.current;
+    if (item == null || _lastMediaItemId != item.path) return;
+    if (mediaItem.value?.duration != dur) {
+      mediaItem.add(_buildMediaItem(item, dur));
+    }
+  }
+
+  MediaItem _buildMediaItem(QueueItem item, Duration dur) {
+    final art = item.thumb.isNotEmpty ? Uri.tryParse(item.thumb) : null;
+    return MediaItem(
+      id: item.path,
+      title: item.name,
+      duration: dur > Duration.zero ? dur : null,
+      artUri: (art != null && art.hasScheme) ? art : null,
+      playable: true,
+    );
+  }
+
   void _pushPlaybackState() {
-    final s = _c.player.state;
+    if (_disposed) return;
+    final playing = _c.isPlaying;
     playbackState.add(playbackState.value.copyWith(
       controls: [
         MediaControl.skipToPrevious,
-        s.playing ? MediaControl.pause : MediaControl.play,
+        playing ? MediaControl.pause : MediaControl.play,
         MediaControl.skipToNext,
       ],
       systemActions: const {
@@ -70,10 +114,10 @@ class PlayerAudioHandler extends BaseAudioHandler {
       },
       androidCompactActionIndices: const [0, 1, 2],
       processingState: _mapProcessingState(),
-      playing: s.playing,
-      updatePosition: s.position,
-      bufferedPosition: s.buffer,
-      speed: _c.speed,
+      playing: playing,
+      updatePosition: _c.currentPosition,
+      bufferedPosition: _c.currentBuffer,
+      speed: _c.effectiveSpeed,
     ));
   }
 
@@ -93,10 +137,24 @@ class PlayerAudioHandler extends BaseAudioHandler {
   }
 
   @override
-  Future<void> play() => _c.player.play();
+  Future<void> play() async {
+    if (_c.status == PlaybackStatus.idle && _c.current != null) {
+      await _c.resumeSession();
+      return;
+    }
+    if (_c.status == PlaybackStatus.error) {
+      await _c.retryNow();
+      return;
+    }
+    await _c.togglePlay();
+  }
 
   @override
-  Future<void> pause() => _c.player.pause();
+  Future<void> pause() async {
+    if (_c.isPlaying) {
+      await _c.togglePlay();
+    }
+  }
 
   @override
   Future<void> seek(Duration position) => _c.seek(position);
@@ -109,15 +167,15 @@ class PlayerAudioHandler extends BaseAudioHandler {
 
   @override
   Future<void> stop() async {
-    await _c.onAppPaused();
-    await _c.player.pause();
+    await _c.stop();
+    await super.stop();
   }
 
   /// App 退后台钩子：视频且设置"后台不放声音"时暂停
   Future<void> onAppBackgrounded() async {
     final item = _c.current;
-    if (item != null && item.isVideo && !_settings().videoBackgroundAudio) {
-      await _c.player.pause();
+    if (item != null && item.isVideo && !_settings().videoBackgroundAudio && _c.isPlaying) {
+      await _c.togglePlay();
     }
   }
 }

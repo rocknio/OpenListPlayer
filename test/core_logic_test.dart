@@ -119,6 +119,18 @@ void main() {
       final sorted = sortEntries(entries, SortMode.natural);
       expect(sorted.first.isDirectory, isTrue);
     });
+
+    test('修改时间排序：队列顺序与文件浏览器列表顺序一致', () {
+      final timedEntries = [
+        FsEntry(name: 'late.mp3', isDirectory: false, size: 100, modified: DateTime(2026, 5, 3)),
+        FsEntry(name: 'early.mp3', isDirectory: false, size: 100, modified: DateTime(2026, 5, 1)),
+        FsEntry(name: 'mid.mp4', isDirectory: false, size: 100, modified: DateTime(2026, 5, 2)),
+      ];
+      final browserOrder = sortEntries(timedEntries, SortMode.modified).map((e) => e.name).toList();
+      final queueOrder = buildQueueFromDir('/dir', timedEntries, SortMode.modified).map((e) => e.name).toList();
+      expect(queueOrder, ['early.mp3', 'mid.mp4', 'late.mp3']);
+      expect(queueOrder, browserOrder);
+    });
   });
 
   group('播单续播定位', () {

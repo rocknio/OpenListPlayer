@@ -35,12 +35,16 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
   double _volume = 100;
   double _brightness = 0.5;
   bool _brightnessReady = false;
+  bool _brightnessModified = false;
+  bool _wakelockActive = false;
+  double? _dragMs;
 
   // 手势状态
   double? _dragStartX; // 垂直手势起点的本地 x（判断左/右半屏）
   double _seekAccumSeconds = 0; // 水平手势累计的秒数
 
   PlaybackController? _playback;
+  String? _lastItemPath;
 
   @override
   void initState() {
@@ -48,7 +52,6 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
     _volume = ref.read(playbackProvider).volume;
     _resetHideTimer();
     _loadBrightness();
-    WakelockPlus.enable();
   }
 
   @override
@@ -58,6 +61,8 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
     if (identical(playback, _playback)) return;
     _playback?.removeListener(_onPlaybackChanged);
     _playback = playback..addListener(_onPlaybackChanged);
+    _lastItemPath = playback.current?.path;
+    _syncWakelock();
   }
 
   /// 出错时自动唤出控制层，否则错误与"重试/跳过"藏在被自动隐藏的控制层里。
@@ -65,13 +70,50 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
   /// 直接 setState 会触发 markNeedsLayout during layout 断言，故推迟到帧后。
   void _onPlaybackChanged() {
     if (!mounted) return;
+    _syncWakelock();
+    final curPath = _playback?.current?.path;
+    final switched = curPath != _lastItemPath;
+    if (switched) _lastItemPath = curPath;
+    var needRebuild = false;
+    if (switched || _playback?.status == PlaybackStatus.opening) {
+      if (_dragMs != null) {
+        _dragMs = null;
+        needRebuild = true;
+      }
+      if (_seekAccumSeconds != 0) {
+        _seekAccumSeconds = 0;
+        needRebuild = true;
+      }
+    }
     if (_playback?.status == PlaybackStatus.error && !_controlsVisible) {
       _hideTimer?.cancel();
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (!mounted || _controlsVisible) return;
         setState(() => _controlsVisible = true);
       });
+      return;
     }
+    if (needRebuild) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) setState(() {});
+      });
+    }
+  }
+
+  void _syncWakelock() {
+    final s = _playback?.status;
+    final shouldWake = s == PlaybackStatus.opening ||
+        s == PlaybackStatus.buffering ||
+        s == PlaybackStatus.playing;
+    if (shouldWake == _wakelockActive) return;
+    _wakelockActive = shouldWake;
+    try {
+      if (shouldWake) {
+        WakelockPlus.enable();
+      } else {
+        WakelockPlus.disable();
+      }
+    } catch (_) {}
   }
 
   Future<void> _loadBrightness() async {
@@ -84,8 +126,16 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
   @override
   void dispose() {
     _hideTimer?.cancel();
+    _playback?.restoreSpeed();
     _playback?.removeListener(_onPlaybackChanged);
-    WakelockPlus.disable();
+    if (_wakelockActive) {
+      try {
+        WakelockPlus.disable();
+      } catch (_) {}
+    }
+    if (_brightnessModified) {
+      unawaited(ScreenBrightness().resetApplicationScreenBrightness().catchError((_) {}));
+    }
     // 若用户横屏全屏状态下直接返回/被弹出，确保恢复竖屏锁，避免后续页面卡在横向
     SystemChrome.setPreferredOrientations([DeviceOrientation.portraitUp]);
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
@@ -94,8 +144,9 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
 
   void _resetHideTimer() {
     _hideTimer?.cancel();
+    if (_dragMs != null) return;
     _hideTimer = Timer(const Duration(seconds: 3), () {
-      if (mounted && ref.read(playbackProvider).player.state.playing) {
+      if (mounted && _dragMs == null && ref.read(playbackProvider).isPlaying) {
         setState(() => _controlsVisible = false);
       }
     });
@@ -136,17 +187,23 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
             body: const Center(child: Text('没有正在播放的内容', style: TextStyle(color: AudioTone.muted))),
           );
         }
-        return Scaffold(
-          backgroundColor: AudioTone.bg,
-          body: OrientationBuilder(
-            builder: (context, orientation) {
-              final isLandscape = orientation == Orientation.landscape;
-              if (isLandscape) {
-                SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
-              }
-              return isLandscape ? _buildFullscreen(playback) : _buildPortrait(playback);
-            },
-          ),
+        return OrientationBuilder(
+          builder: (context, orientation) {
+            final isLandscape = orientation == Orientation.landscape;
+            return PopScope(
+              // 横屏全屏按系统返回优先退回竖屏，避免直接退出播放页造成页面跳变
+              canPop: !isLandscape,
+              onPopInvokedWithResult: (didPop, _) {
+                if (!didPop && isLandscape) {
+                  _exitFullscreen();
+                }
+              },
+              child: Scaffold(
+                backgroundColor: AudioTone.bg,
+                body: isLandscape ? _buildFullscreen(playback) : _buildPortrait(playback),
+              ),
+            );
+          },
         );
       },
     );
@@ -202,7 +259,13 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
                           fontSize: 13,
                           color: i == playback.index ? AudioTone.accent : AudioTone.ink,
                         )),
-                    onTap: () => playback.jumpTo(i),
+                    onTap: () {
+                      if (i == playback.index && playback.status == PlaybackStatus.idle) {
+                        playback.resumeSession();
+                      } else if (i != playback.index) {
+                        playback.jumpTo(i);
+                      }
+                    },
                   ),
               ],
             ),
@@ -253,6 +316,11 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
               if (secs != 0) playback.seekRelative(secs);
               setState(() {});
             },
+            onHorizontalDragCancel: () {
+              if (_seekAccumSeconds != 0) {
+                setState(() => _seekAccumSeconds = 0);
+              }
+            },
           ),
         ),
         // 控制层（在 seek 手势层之上，保证进度条拖动优先）
@@ -266,9 +334,11 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
       onDoubleTap: () => playback.togglePlay(),
       onLongPressStart: (_) => playback.setTemporarySpeed(3.0),
       onLongPressEnd: (_) => playback.restoreSpeed(),
+      onLongPressCancel: () => playback.restoreSpeed(),
       onVerticalDragStart: (d) => _dragStartX = d.localPosition.dx,
       onVerticalDragUpdate: (d) => _verticalDrag(playback, d),
       onVerticalDragEnd: (_) => _dragStartX = null,
+      onVerticalDragCancel: () => _dragStartX = null,
       // 竖屏必须给视频区一个有限高度：Stack(fit: expand) 在 Column 的非 flex
       // 子项里会拿到 h=∞ 约束，触发 "BoxConstraints forces an infinite height"。
       child: fullscreen ? SizedBox.expand(child: content) : AspectRatio(aspectRatio: 16 / 9, child: content),
@@ -277,7 +347,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
 
   Widget _seekPreview(PlaybackController playback) {
     final secs = _seekAccumSeconds.round();
-    final base = playback.player.state.position;
+    final base = playback.currentPosition;
     final target = secs >= 0
         ? base + Duration(seconds: secs)
         : (base.inSeconds + secs < 0 ? Duration.zero : base + Duration(seconds: secs));
@@ -335,9 +405,9 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
 
   /// 已缓冲比例（无时长信息时返回 null）
   double? _bufferedRatio(PlaybackController playback) {
-    final dur = playback.player.state.duration;
+    final dur = playback.currentDuration;
     if (dur.inMilliseconds <= 0) return null;
-    final buffered = playback.player.state.buffer;
+    final buffered = playback.currentBuffer;
     if (buffered.inMilliseconds <= 0) return null;
     return (buffered.inMilliseconds / dur.inMilliseconds).clamp(0.0, 1.0);
   }
@@ -390,11 +460,11 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
                         tooltip: '返回',
                         icon: const Icon(Icons.arrow_back, color: AppPalette.darkInk),
                         onPressed: () async {
-                          final navigator = Navigator.of(context);
                           if (fullscreen) {
                             await _exitFullscreen();
+                            return;
                           }
-                          if (mounted) navigator.maybePop();
+                          if (mounted) Navigator.of(context).maybePop();
                         },
                       ),
                       Expanded(
@@ -504,16 +574,24 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
       mainAxisSize: MainAxisSize.min,
       children: [
         // 进度条
-        Row(
-          children: [
-            _positionText(playback),
-            Expanded(
-              child: StreamBuilder<Duration>(
-                stream: playback.player.stream.position,
-                builder: (context, snap) {
-                  final pos = snap.data ?? Duration.zero;
-                  final dur = playback.player.state.duration;
-                  return SliderTheme(
+        StreamBuilder<Duration>(
+          stream: playback.positionStream,
+          builder: (context, snap) {
+            final streamPos = snap.data ?? playback.currentPosition;
+            final dur = playback.currentDuration;
+            final effectiveMs = _dragMs ??
+                (dur.inMilliseconds > 0
+                    ? streamPos.inMilliseconds.clamp(0, dur.inMilliseconds).toDouble()
+                    : 0.0);
+            final displayPos = Duration(milliseconds: effectiveMs.toInt());
+            return Row(
+              children: [
+                Text(
+                  formatDuration(displayPos),
+                  style: const TextStyle(color: AppPalette.darkMuted, fontSize: 12),
+                ),
+                Expanded(
+                  child: SliderTheme(
                     data: SliderThemeData(
                       trackHeight: 3,
                       activeTrackColor: AppPalette.darkAccent,
@@ -521,25 +599,43 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
                       thumbColor: AppPalette.darkAccent,
                       overlayColor: AppPalette.darkAccent.withValues(alpha: 0.16),
                       thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 7),
-                      // overlay 参与 Slider 的高度计算，22 → 44pt 命中区（iOS 最小触控尺寸）
                       overlayShape: const RoundSliderOverlayShape(overlayRadius: 22),
                     ),
                     child: Slider(
                       value: dur.inMilliseconds > 0
-                          ? pos.inMilliseconds.clamp(0, dur.inMilliseconds).toDouble()
+                          ? effectiveMs.clamp(0.0, dur.inMilliseconds.toDouble())
                           : 0,
                       max: dur.inMilliseconds > 0 ? dur.inMilliseconds.toDouble() : 1,
-                      onChanged: (v) => playback.seek(Duration(milliseconds: v.toInt())),
+                      onChangeStart: dur.inMilliseconds > 0
+                          ? (v) {
+                              _hideTimer?.cancel();
+                              setState(() => _dragMs = v);
+                            }
+                          : null,
+                      onChanged: dur.inMilliseconds > 0
+                          ? (v) => setState(() => _dragMs = v)
+                          : null,
+                      onChangeEnd: dur.inMilliseconds > 0
+                          ? (v) {
+                              if (_dragMs == null) {
+                                _resetHideTimer();
+                                return; // 拖动中途已切歌重置，忽略松手旧位置
+                              }
+                              setState(() => _dragMs = null);
+                              playback.seek(Duration(milliseconds: v.toInt()));
+                              _resetHideTimer();
+                            }
+                          : null,
                     ),
-                  );
-                },
-              ),
-            ),
-            Text(
-              formatDuration(playback.player.state.duration),
-              style: const TextStyle(color: AppPalette.darkMuted, fontSize: 12),
-            ),
-          ],
+                  ),
+                ),
+                Text(
+                  formatDuration(dur),
+                  style: const TextStyle(color: AppPalette.darkMuted, fontSize: 12),
+                ),
+              ],
+            );
+          },
         ),
         // 按钮行：竖屏内嵌区只有 ~226pt 高，必须单行；横屏窄窗口才拆两行。
         _buttonRow(playback, compact: compact),
@@ -552,13 +648,19 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
       IconButton(
         tooltip: '上一个',
         icon: const Icon(Icons.skip_previous, color: AppPalette.darkInk),
-        onPressed: () => playback.previous(),
+        onPressed: () {
+          _resetHideTimer();
+          playback.previous();
+        },
       ),
       _playPause(playback),
       IconButton(
         tooltip: '下一个',
         icon: const Icon(Icons.skip_next, color: AppPalette.darkInk),
-        onPressed: () => playback.next(),
+        onPressed: () {
+          _resetHideTimer();
+          playback.next();
+        },
       ),
     ];
     final secondary = <Widget>[
@@ -590,26 +692,19 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
     );
   }
 
-  Widget _positionText(PlaybackController playback) {
-    return StreamBuilder<Duration>(
-      stream: playback.player.stream.position,
-      builder: (context, snap) => Text(
-        formatDuration(snap.data ?? Duration.zero),
-        style: const TextStyle(color: AppPalette.darkMuted, fontSize: 12),
-      ),
-    );
-  }
-
   Widget _playPause(PlaybackController playback) {
     return StreamBuilder<bool>(
-      stream: playback.player.stream.playing,
+      stream: playback.playingStream,
       builder: (context, snap) {
-        final playing = snap.data ?? playback.player.state.playing;
+        final playing = snap.data ?? playback.isPlaying;
         return IconButton(
           tooltip: playing ? '暂停' : '播放',
           iconSize: 36,
           icon: Icon(playing ? Icons.pause : Icons.play_arrow, color: AppPalette.darkAccent),
-          onPressed: () => playback.togglePlay(),
+          onPressed: () {
+            _resetHideTimer();
+            playback.togglePlay();
+          },
         );
       },
     );
@@ -617,7 +712,10 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
 
   Widget _speedButton(PlaybackController playback) {
     return TextButton(
-      onPressed: () => showSpeedPanel(context, playback),
+      onPressed: () {
+        _resetHideTimer();
+        showSpeedPanel(context, playback);
+      },
       child: Text(
         formatSpeed(playback.speed),
         style: const TextStyle(color: AppPalette.darkAccent, fontSize: 13),
@@ -632,7 +730,10 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
         playback.currentSubtitle != null ? Icons.subtitles : Icons.subtitles_outlined,
         color: AppPalette.darkInk,
       ),
-      onPressed: () => showSubtitlePanel(context, playback),
+      onPressed: () {
+        _resetHideTimer();
+        showSubtitlePanel(context, playback);
+      },
     );
   }
 
@@ -643,7 +744,12 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
         playback.audioTracks.length > 1 ? Icons.graphic_eq : Icons.graphic_eq_outlined,
         color: AppPalette.darkInk,
       ),
-      onPressed: playback.audioTracks.length > 1 ? () => showAudioTrackPanel(context, playback) : null,
+      onPressed: playback.audioTracks.length > 1
+          ? () {
+              _resetHideTimer();
+              showAudioTrackPanel(context, playback);
+            }
+          : null,
     );
   }
 
@@ -656,7 +762,10 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
     return IconButton(
       tooltip: tip,
       icon: Icon(icon, color: AppPalette.darkInk),
-      onPressed: () => playback.cycleMode(),
+      onPressed: () {
+        _resetHideTimer();
+        playback.cycleMode();
+      },
     );
   }
 
@@ -670,7 +779,8 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
       // 左半屏上下滑：亮度
       if (!_brightnessReady) return;
       _brightness = (_brightness - d.delta.dy / 400).clamp(0.05, 1.0);
-      ScreenBrightness().setApplicationScreenBrightness(_brightness);
+      _brightnessModified = true;
+      unawaited(ScreenBrightness().setApplicationScreenBrightness(_brightness).catchError((_) {}));
     } else {
       // 右半屏上下滑：音量
       _volume = (_volume - d.delta.dy / 3).clamp(0, 100);
