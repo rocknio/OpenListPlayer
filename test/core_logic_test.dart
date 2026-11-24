@@ -5,6 +5,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:openlistplayer/core/media_types.dart';
 import 'package:openlistplayer/core/models.dart';
 import 'package:openlistplayer/core/natural_sort.dart';
+import 'package:openlistplayer/core/playlist_resume.dart';
 import 'package:openlistplayer/core/queue_builder.dart';
 import 'package:openlistplayer/core/subtitle_match.dart';
 
@@ -117,6 +118,66 @@ void main() {
     test('目录排序：目录在前', () {
       final sorted = sortEntries(entries, SortMode.natural);
       expect(sorted.first.isDirectory, isTrue);
+    });
+  });
+
+  group('播单续播定位', () {
+    const paths = ['a', 'b', 'c', 'd'];
+    PlaylistResume locate({String? last, Set<String> played = const {}, Set<String> finished = const {}}) =>
+        locatePlaylistResume(
+            paths: paths, lastPlayedPath: last, playedPaths: played, finishedPaths: finished);
+
+    test('从未在本播单播过：播放全部，没有可续播的进度', () {
+      expect(locate(), (index: 0, hasProgress: false));
+    });
+
+    test('从上次播到的条目续播，即使前面有更早的断点', () {
+      expect(locate(last: 'c', played: {'b', 'c'}), (index: 2, hasProgress: true));
+    });
+
+    test('上次播到的条目刚打开、进度还没落盘，仍从它开始', () {
+      expect(locate(last: 'd'), (index: 3, hasProgress: true));
+    });
+
+    test('上次播到的条目已看完：跳到它之后第一个播过且没看完的', () {
+      expect(
+        locate(last: 'b', played: {'a', 'b', 'c'}, finished: {'a', 'b'}),
+        (index: 2, hasProgress: true),
+      );
+    });
+
+    test('上次播到的条目之后没有未看完的断点：绕回开头', () {
+      expect(
+        locate(last: 'd', played: {'b', 'c', 'd'}, finished: {'c', 'd'}),
+        (index: 1, hasProgress: true),
+      );
+    });
+
+    test('全部看完：播放全部', () {
+      expect(
+        locate(last: 'd', played: {'a', 'b', 'c', 'd'}, finished: {'a', 'b', 'c', 'd'}),
+        (index: 0, hasProgress: false),
+      );
+    });
+
+    test('上次播到的条目已看完且没有其它断点：播放全部', () {
+      expect(locate(last: 'b', played: {'b'}, finished: {'b'}), (index: 0, hasProgress: false));
+    });
+
+    test('没有续播指针（旧数据）：第一个播过且没看完的条目', () {
+      // a 没播过、b 已看完、c 有断点 → c
+      expect(locate(played: {'b', 'c'}, finished: {'b'}), (index: 2, hasProgress: true));
+    });
+
+    test('指针指向的文件已被移出播单：退化为第一个播过且没看完的条目', () {
+      expect(locate(last: 'gone', played: {'b', 'c'}, finished: {'b'}), (index: 2, hasProgress: true));
+    });
+
+    test('空播单', () {
+      expect(
+        locatePlaylistResume(paths: [], lastPlayedPath: 'a', playedPaths: {'a'}, finishedPaths: {}),
+        (index: 0, hasProgress: false),
+      );
     });
   });
 }

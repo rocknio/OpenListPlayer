@@ -112,6 +112,11 @@ class PlaybackController extends ChangeNotifier {
   bool get hasQueue => queue.isNotEmpty;
 
   // ---------- 内部状态 ----------
+
+  /// 当前队列来源的播单 id：播单播放时为对应 id，目录/会话播放为 null。
+  /// 用于把进度写入对应播单，实现"每个播单独立进度"。
+  int? _sourcePlaylistId;
+
   int _retryCount = 0;
   Duration _lastPosition = Duration.zero;
   Duration _lastDuration = Duration.zero;
@@ -262,15 +267,17 @@ class PlaybackController extends ChangeNotifier {
     await replaceQueue(items, i < 0 ? 0 : i);
   }
 
-  /// 播放手动播单：复制为"正在播放"队列
-  Future<void> playQueue(List<QueueItem> items, int startIndex) =>
-      replaceQueue(List.of(items), startIndex);
+  /// 播放手动播单：复制为"正在播放"队列，并记录来源播单用于独立进度
+  Future<void> playQueue(List<QueueItem> items, int startIndex, {int? playlistId}) =>
+      replaceQueue(List.of(items), startIndex, sourcePlaylistId: playlistId);
 
-  Future<void> replaceQueue(List<QueueItem> items, int startIndex) async {
+  Future<void> replaceQueue(List<QueueItem> items, int startIndex, {int? sourcePlaylistId}) async {
     final wasPlayingItem = current;
     if (wasPlayingItem != null) {
       _recordProgressNow();
     }
+    // 新队列确定后再切换来源：上面的 _recordProgressNow 仍归属旧队列
+    _sourcePlaylistId = sourcePlaylistId;
     queue = items;
     index = startIndex.clamp(0, items.length - 1);
     _notify();
@@ -367,22 +374,44 @@ class PlaybackController extends ChangeNotifier {
     _notify();
 
     // 起始位置：重试→最近位置（绝不回片头）；会话恢复→forceStart；
-    // 否则读历史进度续播（≥95% 视为看完，从头播）
+    // 否则读进度续播（播单播放读该播单的独立进度，其它读全局；已看完/≥95% 视为看完从头播）
     Duration? start;
+    final playlistId = _sourcePlaylistId;
     if (isRetry) {
       start = _retryPosition;
     } else if (forceStart != null) {
       start = forceStart;
     } else {
-      final prog = await _db.getProgress(item.path);
-      if (prog != null) {
-        final pos = Duration(milliseconds: prog.positionMs);
-        final dur = Duration(milliseconds: prog.durationMs);
-        if (!ProgressRules.isFinished(pos, dur)) start = pos;
+      // 播单来源读该播单的独立进度，其它读全局进度
+      if (playlistId != null) {
+        final p = await _db.getPlaylistProgress(playlistId, item.path);
+        if (p != null) {
+          final pos = Duration(milliseconds: p.positionMs);
+          final dur = Duration(milliseconds: p.durationMs);
+          if (p.finished || ProgressRules.isFinished(pos, dur)) {
+            // 上次在本播单里已看完：清掉记录，从头播
+            await _db.clearPlaylistProgress(playlistId, item.path);
+          } else {
+            start = pos;
+          }
+        }
+      } else {
+        final p = await _db.getProgress(item.path);
+        if (p != null) {
+          final pos = Duration(milliseconds: p.positionMs);
+          final dur = Duration(milliseconds: p.durationMs);
+          if (!ProgressRules.isFinished(pos, dur)) start = pos;
+        }
       }
     }
 
     try {
+      if (serial != _openSerial || _disposed) return;
+      // 播单来源：更新续播指针（"本播单上次播到这个文件"），详情页"继续播放"据此定位到具体条目
+      if (playlistId != null) {
+        await _writePlaylist(() => _db.setPlaylistLastPlayed(playlistId, item.path));
+        if (serial != _openSerial || _disposed) return;
+      }
       final link = await _api().getFileLink(item.path);
       if (serial != _openSerial || _disposed) return;
       debugPrint('[OLP] open: ${link.url}');
@@ -637,6 +666,10 @@ class PlaybackController extends ChangeNotifier {
     if (item == null) return;
     // 看完：清进度（下次从头）+ 记历史
     await _db.clearProgress(item.path);
+    final playlistId = _sourcePlaylistId;
+    if (playlistId != null) {
+      await _writePlaylist(() => _db.markPlaylistProgressFinished(playlistId, item.path, _lastDuration));
+    }
     await _db.touchHistory(item);
     if (mode == PlayMode.repeatOne) {
       await _player.seek(Duration.zero);
@@ -722,10 +755,19 @@ class PlaybackController extends ChangeNotifier {
     final pos = _lastPosition;
     final dur = _lastDuration;
     if (!ProgressRules.shouldRecord(dur)) return;
+    final playlistId = _sourcePlaylistId;
     if (ProgressRules.isFinished(pos, dur)) {
       await _db.clearProgress(item.path);
+      // 播单进度保留"已看完"行（详情页展示 + 续播时跳过）；全局进度仍是看完即删
+      if (playlistId != null) {
+        await _writePlaylist(() => _db.markPlaylistProgressFinished(playlistId, item.path, dur));
+      }
     } else if (pos > Duration.zero) {
       await _db.upsertProgress(item.path, pos, dur);
+      // 播单来源：同一文件在各自播单独立记录断点
+      if (playlistId != null) {
+        await _writePlaylist(() => _db.upsertPlaylistProgress(playlistId, item.path, pos, dur));
+      }
     }
     unawaited(_saveSessionNow());
   }
@@ -733,7 +775,17 @@ class PlaybackController extends ChangeNotifier {
   Future<void> _saveSessionNow() async {
     final item = current;
     if (item == null) return;
-    await _db.saveSession(queue, index, _lastPosition);
+    await _db.saveSession(queue, index, _lastPosition, sourcePlaylistId: _sourcePlaylistId);
+  }
+
+  /// 播单进度 / 续播指针是附属记录：写失败不能影响播放和全局进度。
+  /// 例如播单在播放途中被删除，外键约束会拒绝后续写入。
+  Future<void> _writePlaylist(Future<void> Function() write) async {
+    try {
+      await write();
+    } catch (e) {
+      debugPrint('[OLP] playlist write skipped: $e');
+    }
   }
 
   // ---------- 会话恢复 ----------
@@ -744,6 +796,7 @@ class PlaybackController extends ChangeNotifier {
     if (s == null) return;
     queue = s.queue;
     index = s.index;
+    _sourcePlaylistId = s.sourcePlaylistId;
     _restoredPosition = s.position;
     _lastPosition = s.position;
     _notify();
@@ -758,8 +811,10 @@ class PlaybackController extends ChangeNotifier {
     final pos = _restoredPosition;
     _restoredPosition = null;
     if (pos != null && pos > Duration.zero && status == PlaybackStatus.idle) {
-      final prog = await _db.getProgress(item.path);
-      final durMs = prog?.durationMs ?? 0;
+      final playlistId = _sourcePlaylistId;
+      final durMs = playlistId != null
+          ? (await _db.getPlaylistProgress(playlistId, item.path))?.durationMs ?? 0
+          : (await _db.getProgress(item.path))?.durationMs ?? 0;
       if (durMs > 0 && pos.inMilliseconds / durMs < 0.95) {
         await _openCurrent(forceStart: pos);
         return;
