@@ -226,6 +226,13 @@ Future<void> showAudioTrackPanel(BuildContext context, PlaybackController playba
 Future<void> showSubtitlePanel(BuildContext context, PlaybackController playback, {bool dark = false}) {
   return _showPlayerSheet(context, playback, dark, builder: (sheetContext) {
     final cur = playback.currentSubtitle;
+    final loadedExternalNames = playback.subtitleTracks
+        .where((t) => t.isExternal && t.title != null)
+        .map((t) => t.title!)
+        .toSet();
+    final unloadedSubs = playback.availableExternalSubs
+        .where((name) => !loadedExternalNames.contains(name))
+        .toList();
     return ListView(
       shrinkWrap: true,
       children: [
@@ -278,12 +285,12 @@ Future<void> showSubtitlePanel(BuildContext context, PlaybackController playback
             ],
           ),
         ),
-        if (playback.availableExternalSubs.isNotEmpty) ...[
+        if (unloadedSubs.isNotEmpty) ...[
           const Padding(
             padding: EdgeInsets.fromLTRB(16, 8, 16, 0),
             child: Text('从同目录加载字幕', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13)),
           ),
-          for (final name in playback.availableExternalSubs)
+          for (final name in unloadedSubs)
             ListTile(
               dense: true,
               leading: const Icon(Icons.add, size: 20),

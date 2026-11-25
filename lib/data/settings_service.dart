@@ -39,6 +39,27 @@ class AppSettings {
         bufferProfile: bufferProfile ?? this.bufferProfile,
         globalSpeed: globalSpeed ?? this.globalSpeed,
       );
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is AppSettings &&
+          other.site == site &&
+          other.sortMode == sortMode &&
+          other.defaultPlayMode == defaultPlayMode &&
+          other.videoBackgroundAudio == videoBackgroundAudio &&
+          other.bufferProfile == bufferProfile &&
+          other.globalSpeed == globalSpeed;
+
+  @override
+  int get hashCode => Object.hash(
+        site,
+        sortMode,
+        defaultPlayMode,
+        videoBackgroundAudio,
+        bufferProfile,
+        globalSpeed,
+      );
 }
 
 class SettingsService {

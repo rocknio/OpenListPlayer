@@ -56,9 +56,11 @@ class CurrentQueuePage extends ConsumerStatefulWidget {
 }
 
 class _CurrentQueuePageState extends ConsumerState<CurrentQueuePage> {
+  bool _opening = false;
+
   Future<void> _open(QueueItem item) async {
     if (!mounted) return;
-    Navigator.of(context).push(MaterialPageRoute<void>(
+    await Navigator.of(context).push(MaterialPageRoute<void>(
       builder: (_) => item.isVideo ? const PlayerScreen() : const AudioPage(),
     ));
   }
@@ -101,13 +103,20 @@ class _CurrentQueuePageState extends ConsumerState<CurrentQueuePage> {
                   overflow: TextOverflow.ellipsis,
                 ),
                 onTap: () async {
-                  // 非当前项跳转；恢复会话 idle 态下点当前项则触发续播开播，已开播则直接进播放页
-                  if (!isCurrent) {
-                    await playback.jumpTo(i);
-                  } else if (playback.status == PlaybackStatus.idle) {
-                    await playback.resumeSession();
+                  if (_opening) return;
+                  _opening = true;
+                  try {
+                    // 非当前项跳转；恢复会话 idle 态下点当前项则触发续播开播，已开播则直接进播放页
+                    if (!isCurrent) {
+                      await playback.jumpTo(i);
+                    } else if (playback.status == PlaybackStatus.idle) {
+                      await playback.resumeSession();
+                    }
+                    final active = playback.current ?? item;
+                    await _open(active);
+                  } finally {
+                    _opening = false;
                   }
-                  await _open(item);
                 },
               );
             },

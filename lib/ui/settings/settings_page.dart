@@ -20,6 +20,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
   late final TextEditingController _urlCtrl;
   String? _testResult;
   bool _testing = false;
+  bool _saving = false;
 
   @override
   void initState() {
@@ -66,31 +67,44 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
   }
 
   Future<void> _saveSite() async {
-    final raw = _urlCtrl.text.trim();
-    final name = _nameCtrl.text.trim();
-    if (raw.isEmpty) {
-      await ref.read(settingsProvider.notifier).setSite(null);
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('已清空服务器地址')));
+    if (_saving) return;
+    _saving = true;
+    try {
+      final raw = _urlCtrl.text.trim();
+      final name = _nameCtrl.text.trim();
+      if (raw.isEmpty) {
+        await ref.read(settingsProvider.notifier).setSite(null);
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('已清空服务器地址')));
+        }
+        return;
       }
-      return;
-    }
-    final normalized = SiteConfig.tryNormalizeUrl(raw);
-    if (normalized == null) {
-      setState(() => _testResult = '地址格式无效，请输入以 http:// 或 https:// 开头的完整地址');
-      return;
-    }
-    _urlCtrl.text = normalized;
-    await ref.read(settingsProvider.notifier).setSite(
-          SiteConfig(baseUrl: normalized, name: name),
-        );
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('已保存服务器地址')));
+      final normalized = SiteConfig.tryNormalizeUrl(raw);
+      if (normalized == null) {
+        setState(() => _testResult = '地址格式无效，请输入以 http:// 或 https:// 开头的完整地址');
+        return;
+      }
+      _urlCtrl.text = normalized;
+      await ref.read(settingsProvider.notifier).setSite(
+            SiteConfig(baseUrl: normalized, name: name),
+          );
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('已保存服务器地址')));
+      }
+    } finally {
+      _saving = false;
     }
   }
 
   @override
   Widget build(BuildContext context) {
+    ref.listen<SiteConfig?>(settingsProvider.select((s) => s.site), (prev, next) {
+      if (prev == next) return;
+      final nextUrl = next?.baseUrl ?? '';
+      final nextName = next?.name ?? '';
+      if (_urlCtrl.text != nextUrl) _urlCtrl.text = nextUrl;
+      if (_nameCtrl.text != nextName) _nameCtrl.text = nextName;
+    });
     final settings = ref.watch(settingsProvider);
     return Scaffold(
       appBar: AppBar(title: const Text('设置')),

@@ -341,14 +341,14 @@ class AppDatabase extends _$AppDatabase {
             playedAt: DateTime.now(),
           ),
         );
-        // 保留最近 20 条，裁剪更早的历史记录避免无限增长
-        final keep = await (select(playHistories)
+        // 保留最近 20 条：仅在存在第 21 条及以后的旧记录时才触发删除，避免未超限时多余写通知
+        final stale = await (select(playHistories)
               ..orderBy([(t) => OrderingTerm.desc(t.playedAt)])
-              ..limit(20))
+              ..limit(1000, offset: 20))
             .get();
-        if (keep.length >= 20) {
-          final keepPaths = keep.map((e) => e.path).toList();
-          await (delete(playHistories)..where((t) => t.path.isNotIn(keepPaths))).go();
+        if (stale.isNotEmpty) {
+          final stalePaths = stale.map((e) => e.path).toList();
+          await (delete(playHistories)..where((t) => t.path.isIn(stalePaths))).go();
         }
       });
 
@@ -404,15 +404,19 @@ class AppDatabase extends _$AppDatabase {
     final row = await (select(sessionState)..where((t) => t.id.equals(1))).getSingleOrNull();
     if (row == null) return null;
     try {
-      final list = (jsonDecode(row.queueJson) as List<dynamic>)
-          .map((e) => queueItemFromJson(e as Map<String, dynamic>))
+      final raw = jsonDecode(row.queueJson);
+      if (raw is! List) return null;
+      final list = raw
+          .whereType<Map<dynamic, dynamic>>()
+          .map((e) => queueItemFromJson(Map<String, dynamic>.from(e)))
+          .where((q) => q.path.isNotEmpty)
           .toList();
       if (list.isEmpty) return null;
       return (
         queue: list,
         index: row.currentIndex.clamp(0, list.length - 1),
-        position: Duration(milliseconds: row.positionMs),
-        duration: Duration(milliseconds: row.durationMs),
+        position: Duration(milliseconds: row.positionMs < 0 ? 0 : row.positionMs),
+        duration: Duration(milliseconds: row.durationMs < 0 ? 0 : row.durationMs),
         sourcePlaylistId: row.sourcePlaylistId,
       );
     } catch (_) {
@@ -429,10 +433,10 @@ Map<String, dynamic> queueItemToJson(QueueItem q) =>
 
 /// QueueItem 的 JSON 解码
 QueueItem queueItemFromJson(Map<String, dynamic> j) => QueueItem(
-      path: j['path'] as String,
-      name: j['name'] as String,
+      path: j['path']?.toString() ?? '',
+      name: j['name']?.toString() ?? '',
       isVideo: (j['isVideo'] as bool?) ?? false,
       size: (j['size'] as num?)?.toInt() ?? 0,
       // 旧会话没有 thumb 字段，缺省空字符串
-      thumb: j['thumb'] as String? ?? '',
+      thumb: j['thumb']?.toString() ?? '',
     );

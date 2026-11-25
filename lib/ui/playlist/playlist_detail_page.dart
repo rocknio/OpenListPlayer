@@ -27,6 +27,7 @@ class _PlaylistDetailPageState extends ConsumerState<PlaylistDetailPage> {
   late final Stream<PlaylistState?> _stateStream;
   late final Stream<List<PlaylistProgress>> _progressStream;
   late final Stream<List<PlaylistItem>> _itemsStream;
+  bool _openingPlayer = false;
 
   @override
   void initState() {
@@ -38,22 +39,30 @@ class _PlaylistDetailPageState extends ConsumerState<PlaylistDetailPage> {
   }
 
   Future<void> _play(List<PlaylistItem> items, int startIndex) async {
-    final playback = ref.read(playbackProvider);
-    final queue = items
-        .map((e) => QueueItem(
-              path: e.path,
-              name: e.name,
-              isVideo: e.isVideo,
-              size: e.size,
-              thumb: e.thumb,
-            ))
-        .toList();
-    // 播放 = 复制为"正在播放"队列（播单本体不动），带来源 id 以使用本播单独立进度
-    await playback.playQueue(queue, startIndex, playlistId: widget.playlistId);
-    if (!mounted) return;
-    Navigator.of(context).push(MaterialPageRoute<void>(
-      builder: (_) => queue[startIndex].isVideo ? const PlayerScreen() : const AudioPage(),
-    ));
+    if (_openingPlayer || items.isEmpty) return;
+    _openingPlayer = true;
+    try {
+      final playback = ref.read(playbackProvider);
+      final queue = items
+          .map((e) => QueueItem(
+                path: e.path,
+                name: e.name,
+                isVideo: e.isVideo,
+                size: e.size,
+                thumb: e.thumb,
+              ))
+          .toList();
+      final safeStart = startIndex.clamp(0, queue.length - 1);
+      // 播放 = 复制为"正在播放"队列（播单本体不动），带来源 id 以使用本播单独立进度
+      await playback.playQueue(queue, safeStart, playlistId: widget.playlistId);
+      if (!mounted) return;
+      final active = playback.current ?? queue[safeStart];
+      await Navigator.of(context).push(MaterialPageRoute<void>(
+        builder: (_) => active.isVideo ? const PlayerScreen() : const AudioPage(),
+      ));
+    } finally {
+      _openingPlayer = false;
+    }
   }
 
   /// 进入文件浏览器为本播单挑选文件

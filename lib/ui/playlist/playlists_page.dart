@@ -9,11 +9,27 @@ import '../../providers.dart';
 import 'current_queue_page.dart';
 import 'playlist_detail_page.dart';
 
-class PlaylistsPage extends ConsumerWidget {
+class PlaylistsPage extends ConsumerStatefulWidget {
   const PlaylistsPage({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<PlaylistsPage> createState() => _PlaylistsPageState();
+}
+
+class _PlaylistsPageState extends ConsumerState<PlaylistsPage> {
+  AppDatabase? _cachedDb;
+  Stream<List<Playlist>>? _playlistsStream;
+
+  Stream<List<Playlist>> _streamFor(AppDatabase db) {
+    if (!identical(_cachedDb, db) || _playlistsStream == null) {
+      _cachedDb = db;
+      _playlistsStream = db.playlistsStream();
+    }
+    return _playlistsStream!;
+  }
+
+  @override
+  Widget build(BuildContext context) {
     final db = ref.watch(dbProvider);
     return Scaffold(
       appBar: AppBar(title: const Text('播单')),
@@ -28,7 +44,7 @@ class PlaylistsPage extends ConsumerWidget {
           const Divider(height: 1),
           Expanded(
             child: StreamBuilder<List<Playlist>>(
-              stream: db.playlistsStream(),
+              stream: _streamFor(db),
               builder: (context, snap) {
                 final list = snap.data ?? [];
                 if (list.isEmpty) {
@@ -36,29 +52,30 @@ class PlaylistsPage extends ConsumerWidget {
                     child: Text('还没有播单\n点右下角新建，进入播单后可添加文件', textAlign: TextAlign.center),
                   );
                 }
-                return ListView(
+                return ListView.builder(
                   padding: const EdgeInsets.only(bottom: 88),
-                  children: [
-                    for (final p in list)
-                      ListTile(
-                        leading: const Icon(Icons.playlist_play),
-                        title: Text(p.name),
-                        subtitle: Text(_fmtDate(p.createdAt)),
-                        trailing: PopupMenuButton<String>(
-                          onSelected: (action) {
-                            if (action == 'rename') _rename(context, db, p);
-                            if (action == 'delete') _delete(context, db, p);
-                          },
-                          itemBuilder: (_) => const [
-                            PopupMenuItem(value: 'rename', child: Text('重命名')),
-                            PopupMenuItem(value: 'delete', child: Text('删除播单')),
-                          ],
-                        ),
-                        onTap: () => Navigator.of(context).push(MaterialPageRoute<void>(
-                          builder: (_) => PlaylistDetailPage(playlistId: p.id, playlistName: p.name),
-                        )),
+                  itemCount: list.length,
+                  itemBuilder: (context, i) {
+                    final p = list[i];
+                    return ListTile(
+                      leading: const Icon(Icons.playlist_play),
+                      title: Text(p.name),
+                      subtitle: Text(_fmtDate(p.createdAt)),
+                      trailing: PopupMenuButton<String>(
+                        onSelected: (action) {
+                          if (action == 'rename') _rename(context, db, p);
+                          if (action == 'delete') _delete(context, db, p);
+                        },
+                        itemBuilder: (_) => const [
+                          PopupMenuItem(value: 'rename', child: Text('重命名')),
+                          PopupMenuItem(value: 'delete', child: Text('删除播单')),
+                        ],
                       ),
-                  ],
+                      onTap: () => Navigator.of(context).push(MaterialPageRoute<void>(
+                        builder: (_) => PlaylistDetailPage(playlistId: p.id, playlistName: p.name),
+                      )),
+                    );
+                  },
                 );
               },
             ),
@@ -72,14 +89,18 @@ class PlaylistsPage extends ConsumerWidget {
 
   Future<void> _create(BuildContext context, AppDatabase db) async {
     final name = await _promptName(context, title: '新建播单');
-    if (name == null || name.trim().isEmpty) return;
-    await db.createPlaylist(name.trim());
+    final trimmed = name?.trim() ?? '';
+    if (trimmed.isEmpty) return;
+    final safeName = trimmed.length > 100 ? trimmed.substring(0, 100) : trimmed;
+    await db.createPlaylist(safeName);
   }
 
   Future<void> _rename(BuildContext context, AppDatabase db, Playlist p) async {
     final name = await _promptName(context, title: '重命名播单', initial: p.name);
-    if (name == null || name.trim().isEmpty) return;
-    await db.renamePlaylist(p.id, name.trim());
+    final trimmed = name?.trim() ?? '';
+    if (trimmed.isEmpty) return;
+    final safeName = trimmed.length > 100 ? trimmed.substring(0, 100) : trimmed;
+    await db.renamePlaylist(p.id, safeName);
   }
 
   Future<void> _delete(BuildContext context, AppDatabase db, Playlist p) async {
@@ -138,7 +159,8 @@ class _PlaylistNameDialogState extends State<_PlaylistNameDialog> {
       content: TextField(
         controller: _ctrl,
         autofocus: true,
-        decoration: const InputDecoration(hintText: '播单名称'),
+        maxLength: 100,
+        decoration: const InputDecoration(hintText: '播单名称', counterText: ''),
         onSubmitted: (v) => Navigator.pop(context, v),
       ),
       actions: [

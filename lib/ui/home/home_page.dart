@@ -14,11 +14,27 @@ import '../playlist/playlist_detail_page.dart';
 import '../tab_index.dart';
 import '../widgets.dart';
 
-class HomePage extends ConsumerWidget {
+class HomePage extends ConsumerStatefulWidget {
   const HomePage({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<HomePage> createState() => _HomePageState();
+}
+
+class _HomePageState extends ConsumerState<HomePage> {
+  AppDatabase? _cachedDb;
+  Stream<List<Playlist>>? _playlistsStream;
+
+  Stream<List<Playlist>> _streamFor(AppDatabase db) {
+    if (!identical(_cachedDb, db) || _playlistsStream == null) {
+      _cachedDb = db;
+      _playlistsStream = db.playlistsStream();
+    }
+    return _playlistsStream!;
+  }
+
+  @override
+  Widget build(BuildContext context) {
     final hasSite = ref.watch(hasSiteProvider);
     if (!hasSite) {
       return Scaffold(
@@ -40,7 +56,7 @@ class HomePage extends ConsumerWidget {
           const CurrentPlaylistTile(),
           const Divider(height: 1),
           StreamBuilder<List<Playlist>>(
-            stream: db.playlistsStream(),
+            stream: _streamFor(db),
             builder: (context, snap) {
               final list = snap.data ?? [];
               if (list.isEmpty) {
@@ -75,11 +91,18 @@ class HomePage extends ConsumerWidget {
 }
 
 /// 继续播放卡片：恢复上次会话（队列 + 文件 + 位置）
-class _ResumeCard extends ConsumerWidget {
+class _ResumeCard extends ConsumerStatefulWidget {
   const _ResumeCard();
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<_ResumeCard> createState() => _ResumeCardState();
+}
+
+class _ResumeCardState extends ConsumerState<_ResumeCard> {
+  bool _resuming = false;
+
+  @override
+  Widget build(BuildContext context) {
     final playback = ref.watch(playbackProvider);
     return ListenableBuilder(
       listenable: playback,
@@ -122,11 +145,18 @@ class _ResumeCard extends ConsumerWidget {
                       icon: const Icon(Icons.play_arrow),
                       label: const Text('继续播放'),
                       onPressed: () async {
-                        await playback.resumeSession();
-                        if (!context.mounted) return;
-                        Navigator.of(context).push(MaterialPageRoute<void>(
-                          builder: (_) => item.isVideo ? const PlayerScreen() : const AudioPage(),
-                        ));
+                        if (_resuming) return;
+                        _resuming = true;
+                        try {
+                          await playback.resumeSession();
+                          if (!context.mounted) return;
+                          final cur = playback.current ?? item;
+                          await Navigator.of(context).push(MaterialPageRoute<void>(
+                            builder: (_) => cur.isVideo ? const PlayerScreen() : const AudioPage(),
+                          ));
+                        } finally {
+                          _resuming = false;
+                        }
                       },
                     ),
                   ),

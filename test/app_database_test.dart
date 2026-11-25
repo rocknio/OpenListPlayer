@@ -256,6 +256,22 @@ void main() {
       final all = await db.select(db.playHistories).get();
       expect(all.length, lessThanOrEqualTo(20));
     });
+
+    test('R3-L1: loadSession 过滤混入的脏条目与负时长，保留有效会话项不崩溃', () async {
+      await db.customStatement(
+        'INSERT OR REPLACE INTO session_state (id, queue_json, current_index, position_ms, duration_ms) '
+        'VALUES (1, ?, 5, -100, -50)',
+        [
+          '["broken", {"path": "", "name": "empty"}, {"path": "/ok.mp3", "name": "ok.mp3", "isVideo": false}]',
+        ],
+      );
+      final loaded = await db.loadSession();
+      expect(loaded, isNotNull);
+      expect(loaded!.queue.single.path, '/ok.mp3');
+      expect(loaded.index, 0);
+      expect(loaded.position, Duration.zero);
+      expect(loaded.duration, Duration.zero);
+    });
   });
 }
 

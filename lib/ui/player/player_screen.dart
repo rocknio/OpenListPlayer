@@ -16,6 +16,7 @@ import '../../player/playback_controller.dart';
 import '../../providers.dart';
 import '../app_theme.dart';
 import '../widgets.dart';
+import 'audio_page.dart';
 import 'audio_theme.dart';
 import 'panels.dart';
 
@@ -37,6 +38,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
   bool _brightnessReady = false;
   bool _brightnessModified = false;
   bool _wakelockActive = false;
+  bool _switchingRoute = false;
   double? _dragMs;
 
   // 手势状态
@@ -71,9 +73,24 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
   void _onPlaybackChanged() {
     if (!mounted) return;
     _syncWakelock();
-    final curPath = _playback?.current?.path;
+    final cur = _playback?.current;
+    final curPath = cur?.path;
     final switched = curPath != _lastItemPath;
     if (switched) _lastItemPath = curPath;
+    if (!_switchingRoute && cur != null && !cur.isVideo) {
+      _switchingRoute = true;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        if (ModalRoute.of(context)?.isCurrent == true && _playback?.current?.isVideo == false) {
+          Navigator.of(context).pushReplacement(
+            MaterialPageRoute<void>(builder: (_) => const AudioPage()),
+          );
+        } else {
+          _switchingRoute = false;
+        }
+      });
+      return;
+    }
     var needRebuild = false;
     if (switched || _playback?.status == PlaybackStatus.opening) {
       if (_dragMs != null) {
@@ -107,13 +124,11 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
         s == PlaybackStatus.playing;
     if (shouldWake == _wakelockActive) return;
     _wakelockActive = shouldWake;
-    try {
-      if (shouldWake) {
-        WakelockPlus.enable();
-      } else {
-        WakelockPlus.disable();
-      }
-    } catch (_) {}
+    if (shouldWake) {
+      unawaited(WakelockPlus.enable().catchError((_) {}));
+    } else {
+      unawaited(WakelockPlus.disable().catchError((_) {}));
+    }
   }
 
   Future<void> _loadBrightness() async {
@@ -129,9 +144,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
     _playback?.restoreSpeed();
     _playback?.removeListener(_onPlaybackChanged);
     if (_wakelockActive) {
-      try {
-        WakelockPlus.disable();
-      } catch (_) {}
+      unawaited(WakelockPlus.disable().catchError((_) {}));
     }
     if (_brightnessModified) {
       unawaited(ScreenBrightness().resetApplicationScreenBrightness().catchError((_) {}));
@@ -218,55 +231,80 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
         children: [
           _videoArea(playback, fullscreen: false),
           Expanded(
-            // 信息区与队列沿用全局米白陶土主题，与音频播放页一致。
-            child: ListView(
-              padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
-              children: [
-                Text(
-                  playback.current?.name ?? '',
-                  style: const TextStyle(
-                    fontSize: 16,
-                    fontWeight: FontWeight.w600,
-                    color: AudioTone.ink,
+            // 信息区与队列沿用全局米白陶土主题，使用 SliverList.builder 懒加载大队列条目。
+            child: CustomScrollView(
+              slivers: [
+                SliverPadding(
+                  padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+                  sliver: SliverToBoxAdapter(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        Text(
+                          playback.current?.name ?? '',
+                          style: const TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.w600,
+                            color: AudioTone.ink,
+                          ),
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          '${playback.current?.isVideo == true ? '视频' : '音频'} · ${playback.current?.parent ?? ''}',
+                          style: const TextStyle(color: AudioTone.muted, fontSize: 12),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                        const SizedBox(height: 12),
+                        Text(
+                          '播放队列 (${playback.queue.length})',
+                          style: const TextStyle(
+                            color: AudioTone.muted,
+                            fontSize: 13,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ],
+                    ),
                   ),
                 ),
-                const SizedBox(height: 4),
-                Text(
-                  '${playback.current?.isVideo == true ? '视频' : '音频'} · ${playback.current?.parent ?? ''}',
-                  style: const TextStyle(color: AudioTone.muted, fontSize: 12),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                ),
-                const SizedBox(height: 12),
-                Text('播放队列 (${playback.queue.length})',
-                    style: const TextStyle(color: AudioTone.muted, fontSize: 13, fontWeight: FontWeight.w600)),
-                const SizedBox(height: 4),
-                for (var i = 0; i < playback.queue.length; i++)
-                  ListTile(
-                    dense: true,
-                    contentPadding: EdgeInsets.zero,
-                    selected: i == playback.index,
-                    selectedTileColor: AudioTone.sand,
-                    leading: Icon(
-                      playback.queue[i].isVideo ? Icons.movie_outlined : Icons.music_note_outlined,
-                      size: 20,
-                      color: i == playback.index ? AudioTone.accent : AudioTone.muted,
-                    ),
-                    title: Text(playback.queue[i].name,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: TextStyle(
-                          fontSize: 13,
-                          color: i == playback.index ? AudioTone.accent : AudioTone.ink,
-                        )),
-                    onTap: () {
-                      if (i == playback.index && playback.status == PlaybackStatus.idle) {
-                        playback.resumeSession();
-                      } else if (i != playback.index) {
-                        playback.jumpTo(i);
-                      }
+                SliverPadding(
+                  padding: const EdgeInsets.fromLTRB(16, 0, 16, 24),
+                  sliver: SliverList.builder(
+                    itemCount: playback.queue.length,
+                    itemBuilder: (context, i) {
+                      final qItem = playback.queue[i];
+                      final isCur = i == playback.index;
+                      return ListTile(
+                        dense: true,
+                        contentPadding: EdgeInsets.zero,
+                        selected: isCur,
+                        selectedTileColor: AudioTone.sand,
+                        leading: Icon(
+                          qItem.isVideo ? Icons.movie_outlined : Icons.music_note_outlined,
+                          size: 20,
+                          color: isCur ? AudioTone.accent : AudioTone.muted,
+                        ),
+                        title: Text(
+                          qItem.name,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            fontSize: 13,
+                            color: isCur ? AudioTone.accent : AudioTone.ink,
+                          ),
+                        ),
+                        onTap: () {
+                          if (isCur && playback.status == PlaybackStatus.idle) {
+                            playback.resumeSession();
+                          } else if (!isCur) {
+                            playback.jumpTo(i);
+                          }
+                        },
+                      );
                     },
                   ),
+                ),
               ],
             ),
           ),
@@ -296,6 +334,35 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
         ),
         // 缓冲/重连覆盖层
         _statusOverlay(playback),
+        // 长按临时倍速激活提示（不受控制层显隐限制）
+        if ((playback.effectiveSpeed - playback.speed).abs() > 0.01)
+          Positioned(
+            top: fullscreen ? MediaQuery.paddingOf(context).top + 14 : 12,
+            left: 0,
+            right: 0,
+            child: IgnorePointer(
+              child: Center(
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+                  decoration: BoxDecoration(
+                    color: AppPalette.scrimStrong,
+                    borderRadius: BorderRadius.circular(999),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Icon(Icons.fast_forward, size: 16, color: AppPalette.darkAccent),
+                      const SizedBox(width: 6),
+                      Text(
+                        '${formatSpeed(playback.effectiveSpeed)} 快进中',
+                        style: const TextStyle(color: AppPalette.darkInk, fontSize: 12),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
         // 快进预览
         if (_seekAccumSeconds != 0) _seekPreview(playback),
         // 水平拖动 seek：左右各让出 kEdgeGestureGuard 给系统边缘返回手势
@@ -696,7 +763,10 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
     return StreamBuilder<bool>(
       stream: playback.playingStream,
       builder: (context, snap) {
-        final playing = snap.data ?? playback.isPlaying;
+        final rawPlaying = snap.data ?? playback.isPlaying;
+        final playing = rawPlaying &&
+            playback.status != PlaybackStatus.error &&
+            playback.status != PlaybackStatus.idle;
         return IconButton(
           tooltip: playing ? '暂停' : '播放',
           iconSize: 36,
@@ -717,7 +787,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
         showSpeedPanel(context, playback);
       },
       child: Text(
-        formatSpeed(playback.speed),
+        formatSpeed(playback.effectiveSpeed),
         style: const TextStyle(color: AppPalette.darkAccent, fontSize: 13),
       ),
     );

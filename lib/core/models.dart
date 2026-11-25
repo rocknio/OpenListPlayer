@@ -19,19 +19,26 @@ class SiteConfig {
         token: token ?? this.token,
       );
 
-  /// 校验并归一化站点根地址（要求 http/https 且包含合法 host，去除末尾 /）；非法返回 null。
+  /// 校验并归一化站点根地址（要求 http/https 且包含合法 host，剥离 Web 端 #fragment 并去除末尾 /）；非法返回 null。
   static String? tryNormalizeUrl(String raw) {
     var url = raw.trim();
+    final hashIdx = url.indexOf('#');
+    if (hashIdx >= 0) {
+      url = url.substring(0, hashIdx).trim();
+    }
     while (url.endsWith('/')) {
       url = url.substring(0, url.length - 1);
     }
     if (url.isEmpty) return null;
     final uri = Uri.tryParse(url);
-    if (uri == null || !uri.hasScheme || (uri.scheme != 'http' && uri.scheme != 'https')) {
-      return null;
-    }
-    if (uri.host.isEmpty) return null;
-    return url;
+    if (uri == null || !uri.hasScheme) return null;
+    final scheme = uri.scheme;
+    if (scheme != 'http' && scheme != 'https') return null;
+    if (uri.host.isEmpty || uri.hasQuery || uri.userInfo.isNotEmpty) return null;
+    if (uri.hasPort && (uri.port < 1 || uri.port > 65535)) return null;
+    final colonIdx = url.indexOf(':');
+    final normalized = colonIdx > 0 ? '$scheme${url.substring(colonIdx)}' : url;
+    return normalized;
   }
 
   @override
@@ -63,6 +70,19 @@ class FsEntry {
 
   /// OpenList 提供的缩略图地址（部分驱动/文件类型为空）
   final String thumb;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is FsEntry &&
+          other.name == name &&
+          other.isDirectory == isDirectory &&
+          other.size == size &&
+          other.modified == modified &&
+          other.thumb == thumb;
+
+  @override
+  int get hashCode => Object.hash(name, isDirectory, size, modified, thumb);
 }
 
 /// "正在播放"队列 / 手动播单共用的条目
@@ -98,6 +118,19 @@ class QueueItem {
         size: size ?? this.size,
         thumb: thumb ?? this.thumb,
       );
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is QueueItem &&
+          other.path == path &&
+          other.name == name &&
+          other.isVideo == isVideo &&
+          other.size == size &&
+          other.thumb == thumb;
+
+  @override
+  int get hashCode => Object.hash(path, name, isVideo, size, thumb);
 }
 
 enum PlayMode { sequentialLoop, repeatOne, shuffle }

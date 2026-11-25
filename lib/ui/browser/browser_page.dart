@@ -41,8 +41,9 @@ class _BrowserPageState extends ConsumerState<BrowserPage> {
   bool get _selecting => _selected.isNotEmpty;
 
   /// 当前目录可用于加播单的媒体条目
-  List<FsEntry> get _selectable =>
-      _entries.where((e) => !e.isDirectory && isMediaFile(e.name)).toList();
+  Iterable<FsEntry> get _selectable =>
+      _entries.where((e) => !e.isDirectory && isMediaFile(e.name));
+  bool get _hasSelectable => _entries.any((e) => !e.isDirectory && isMediaFile(e.name));
 
   String _pathOf(FsEntry e) => joinPath(_path, e.name);
 
@@ -105,8 +106,10 @@ class _BrowserPageState extends ConsumerState<BrowserPage> {
       // 同目录音视频整体替换"正在播放"队列，从所点文件开播（自动续播进度）
       await playback.playFromDirectory(_path, _entries, file.name);
       if (!mounted) return;
+      final nextItem = playback.current;
+      final openVideo = nextItem?.isVideo ?? isVideoFile(file.name);
       await Navigator.of(context).push(MaterialPageRoute<void>(
-        builder: (_) => isVideoFile(file.name) ? const PlayerScreen() : const AudioPage(),
+        builder: (_) => openVideo ? const PlayerScreen() : const AudioPage(),
       ));
     } finally {
       _openingMedia = false;
@@ -168,10 +171,25 @@ class _BrowserPageState extends ConsumerState<BrowserPage> {
 
   @override
   Widget build(BuildContext context) {
-    // 站点地址变化（首次配置/修改）→ 自动回到根目录重新加载
+    // 站点地址变化（首次配置/修改/清空）→ 自动回到根目录或重置状态
     ref.listen<String?>(settingsProvider.select((s) => s.site?.baseUrl), (prev, next) {
       if (next != null && next.isNotEmpty && next != prev) {
         _load(path: '/');
+      } else if ((next == null || next.isEmpty) && prev != null && prev.isNotEmpty) {
+        _loadSerial++;
+        setState(() {
+          _path = '/';
+          _entries = [];
+          _selected.clear();
+          _loading = false;
+          _error = null;
+        });
+      }
+    });
+    // 排序设置修改时立即对当前已加载目录重排，无需用户手动下拉刷新
+    ref.listen<SortMode>(settingsProvider.select((s) => s.sortMode), (prev, next) {
+      if (prev != next && _entries.isNotEmpty) {
+        setState(() => _entries = sortEntries(_entries, next));
       }
     });
     final hasSite = ref.watch(hasSiteProvider);
@@ -214,12 +232,12 @@ class _BrowserPageState extends ConsumerState<BrowserPage> {
         IconButton(
           icon: const Icon(Icons.select_all),
           tooltip: '全选当前目录',
-          onPressed: _selectable.isEmpty ? null : _selectAll,
+          onPressed: !_hasSelectable ? null : _selectAll,
         ),
         IconButton(
           icon: const Icon(Icons.swap_horiz),
           tooltip: '反选当前目录',
-          onPressed: _selectable.isEmpty ? null : _invertSelection,
+          onPressed: !_hasSelectable ? null : _invertSelection,
         ),
         if (_selecting)
           IconButton(

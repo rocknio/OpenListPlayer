@@ -42,6 +42,10 @@ class _AddToPlaylistSheetState extends State<_AddToPlaylistSheet> {
     try {
       final count = await widget.db.addItemsToPlaylist(playlistId, widget.items);
       if (mounted) Navigator.of(context).pop(count);
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('添加失败: $e')));
+      }
     } finally {
       if (mounted) setState(() => _submitting = false);
     }
@@ -49,13 +53,18 @@ class _AddToPlaylistSheetState extends State<_AddToPlaylistSheet> {
 
   Future<void> _createAndAdd() async {
     if (_submitting) return;
-    final name = _newNameCtrl.text.trim();
-    if (name.isEmpty) return;
+    final trimmed = _newNameCtrl.text.trim();
+    if (trimmed.isEmpty) return;
+    final name = trimmed.length > 100 ? trimmed.substring(0, 100) : trimmed;
     setState(() => _submitting = true);
     try {
       final id = await widget.db.createPlaylist(name);
       final count = await widget.db.addItemsToPlaylist(id, widget.items);
       if (mounted) Navigator.of(context).pop(count);
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('创建失败: $e')));
+      }
     } finally {
       if (mounted) setState(() => _submitting = false);
     }
@@ -109,8 +118,10 @@ class _AddToPlaylistSheetState extends State<_AddToPlaylistSheet> {
                   child: TextField(
                     controller: _newNameCtrl,
                     enabled: !_submitting,
+                    maxLength: 100,
                     decoration: const InputDecoration(
                       labelText: '新播单名称',
+                      counterText: '',
                       isDense: true,
                       border: OutlineInputBorder(),
                     ),

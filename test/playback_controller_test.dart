@@ -603,4 +603,340 @@ void main() {
       'CMD:sub-add-same',
     ]);
   });
+
+  test('R1-H3: 同语言无标题多条内置音轨/字幕轨使用复合键记忆，重开时不串轨', () async {
+    final client = buildClient((endpoint, body) async {
+      if (endpoint == '/api/fs/list') {
+        return {'code': 200, 'data': {'content': <dynamic>[]}};
+      }
+      final path = body['path'] as String? ?? '';
+      return {
+        'code': 200,
+        'data': {'name': path.split('/').last, 'raw_url': 'http://cdn$path', 'size': 100},
+      };
+    });
+
+    const item = QueueItem(path: '/anime/ep01.mkv', name: 'ep01.mkv', isVideo: true);
+    final c1 = PlaybackController(
+      api: () => client,
+      db: db,
+      settings: () => defaultSettings,
+      backend: backend,
+    );
+    addTearDown(c1.dispose);
+
+    await c1.replaceQueue(const [item], 0);
+    // 模拟两条 title 均为空、language 均为 chi 的内置字幕轨（id 分别为 1 和 2）
+    final sub1 = SubtitleTrack('1', null, 'chi');
+    final sub2 = SubtitleTrack('2', null, 'chi');
+    final aud1 = AudioTrack('1', null, 'jpn');
+    final aud2 = AudioTrack('2', null, 'jpn');
+    backend.emitTracks(
+      Tracks(
+        audio: [AudioTrack.auto(), aud1, aud2],
+        subtitle: [SubtitleTrack.auto(), SubtitleTrack.no(), sub1, sub2],
+      ),
+      selected: Track(audio: aud1, subtitle: sub1),
+    );
+    await Future<void>.delayed(Duration.zero);
+
+    // 用户手动切到第 2 条同语言轨道
+    await c1.selectAudioTrack(c1.audioTracks[1]);
+    await c1.selectSubtitleTrack(c1.subtitleTracks[1]);
+    expect(backend.lastAudioSelected?.id, '2');
+    expect(backend.lastSubtitleSelected?.id, '2');
+
+    // 重新打开同一视频：应精确恢复到 id='2' 的轨道，而非被第一条同语言 chi/jpn 截胡
+    final backend2 = FakePlayerBackend();
+    final c2 = PlaybackController(
+      api: () => client,
+      db: db,
+      settings: () => defaultSettings,
+      backend: backend2,
+    );
+    addTearDown(c2.dispose);
+
+    await c2.replaceQueue(const [item], 0);
+    backend2.emitTracks(
+      Tracks(
+        audio: [AudioTrack.auto(), aud1, aud2],
+        subtitle: [SubtitleTrack.auto(), SubtitleTrack.no(), sub1, sub2],
+      ),
+      selected: Track(audio: aud1, subtitle: sub1),
+    );
+    await Future<void>.delayed(const Duration(milliseconds: 20));
+
+    expect(backend2.lastAudioSelected?.id, '2');
+    expect(backend2.lastSubtitleSelected?.id, '2');
+  });
+
+  test('R1-M3: 第一个外挂字幕获取直链失败时，后续完好的外挂字幕仍能正常挂载并自动选中', () async {
+    final client = buildClient((endpoint, body) async {
+      if (endpoint == '/api/fs/list') {
+        return {
+          'code': 200,
+          'data': {
+            'content': [
+              {'name': 'ep1.mkv', 'is_dir': false, 'size': 1000},
+              {'name': 'ep1.srt', 'is_dir': false, 'size': 10}, // 第一个字幕将报错
+              {'name': 'ep1.chs.ass', 'is_dir': false, 'size': 12}, // 第二个字幕正常
+            ],
+          },
+        };
+      }
+      final path = body['path'] as String? ?? '';
+      if (path.endsWith('ep1.srt')) {
+        throw const OpenListApiException('字幕文件已损坏', statusCode: 500);
+      }
+      return {
+        'code': 200,
+        'data': {'name': path.split('/').last, 'raw_url': 'http://cdn$path', 'size': 100},
+      };
+    });
+
+    const item = QueueItem(path: '/dir/ep1.mkv', name: 'ep1.mkv', isVideo: true);
+    final c = PlaybackController(
+      api: () => client,
+      db: db,
+      settings: () => defaultSettings,
+      backend: backend,
+    );
+    addTearDown(c.dispose);
+
+    await c.replaceQueue(const [item], 0);
+    await Future<void>.delayed(const Duration(milliseconds: 30));
+
+    expect(backend.externalSubCalls, hasLength(1));
+    expect(backend.externalSubCalls.single.title, 'ep1.chs.ass');
+    expect(backend.externalSubCalls.single.flag, 'select');
+  });
+
+  test('R1-M3: 会话恢复 idle 态下外部 seek 同步更新待恢复断点，resumeSession 从新位置开播', () async {
+    final client = buildClient((endpoint, body) async {
+      final path = body['path'] as String? ?? '';
+      return {
+        'code': 200,
+        'data': {'name': path, 'raw_url': 'http://cdn$path', 'size': 100},
+      };
+    });
+
+    const item = QueueItem(path: '/podcast.mp3', name: 'podcast.mp3', isVideo: false);
+    await db.saveSession(
+      const [item],
+      0,
+      const Duration(seconds: 60),
+      duration: const Duration(seconds: 600),
+    );
+
+    final c = PlaybackController(
+      api: () => client,
+      db: db,
+      settings: () => defaultSettings,
+      backend: backend,
+    );
+    addTearDown(c.dispose);
+
+    await c.restoreSession();
+    expect(c.status, PlaybackStatus.idle);
+
+    // 在尚未开播的 idle 态拖动进度到 180 秒（同时测试越界 clamp）
+    await c.seek(const Duration(seconds: 180));
+    expect(c.currentPosition, const Duration(seconds: 180));
+    expect(backend.openCalls, isEmpty);
+
+    await c.resumeSession();
+    expect(backend.openCalls.single.start, const Duration(seconds: 180));
+  });
+
+  test('R2-H1: 快速连续 jumpTo 多首曲目或切歌后立即 stop()，不会被旧异步写库乱序覆盖或幽灵复播', () async {
+    final client = buildClient((endpoint, body) async {
+      final path = body['path'] as String? ?? '';
+      await Future<void>.delayed(const Duration(milliseconds: 25));
+      return {
+        'code': 200,
+        'data': {'name': path.split('/').last, 'raw_url': 'http://cdn$path', 'size': 100},
+      };
+    });
+
+    final c = PlaybackController(
+      api: () => client,
+      db: db,
+      settings: () => defaultSettings,
+      backend: backend,
+    );
+    addTearDown(c.dispose);
+
+    const items = [
+      QueueItem(path: '/ep1.mp3', name: 'ep1.mp3', isVideo: false),
+      QueueItem(path: '/ep2.mp3', name: 'ep2.mp3', isVideo: false),
+      QueueItem(path: '/ep3.mp3', name: 'ep3.mp3', isVideo: false),
+    ];
+    await c.replaceQueue(items, 0);
+    backend.emitDuration(const Duration(seconds: 120));
+    backend.emitPosition(const Duration(seconds: 45));
+    await Future<void>.delayed(Duration.zero);
+
+    // 用户快速连点跳到 ep2 再跳到 ep3（不等待前一次完成）
+    final f1 = c.jumpTo(1);
+    final f2 = c.jumpTo(2);
+    await Future.wait([f1, f2]);
+
+    // 最终必须停留在 ep3，且 ep1 的 45s 断点已准确落盘，ep2 未被污染为 45s
+    expect(c.current?.path, '/ep3.mp3');
+    expect(backend.openCalls.last.url, 'http://cdn/ep3.mp3');
+    expect((await db.getProgress('/ep1.mp3'))?.positionMs, 45000);
+    expect(await db.getProgress('/ep2.mp3'), isNull);
+
+    // 发起切歌后立即调用 stop()：绝不能在写库返回后幽灵复播
+    final fNext = c.next();
+    await c.stop();
+    await fNext;
+    expect(c.status, PlaybackStatus.idle);
+  });
+
+  test('R2-H2: 播放瞬断启动 800ms _retryTimer 后若底层流自行恢复 playing=true，立即取消重连定时器防误打断',
+      () async {
+    final client = buildClient((endpoint, body) async {
+      final path = body['path'] as String? ?? '';
+      return {
+        'code': 200,
+        'data': {'name': path, 'raw_url': 'http://cdn$path', 'size': 100},
+      };
+    });
+
+    final c = PlaybackController(
+      api: () => client,
+      db: db,
+      settings: () => defaultSettings,
+      backend: backend,
+    );
+    addTearDown(c.dispose);
+
+    const item = QueueItem(path: '/live.mp3', name: 'live.mp3', isVideo: false);
+    await c.replaceQueue(const [item], 0);
+    expect(backend.openCalls, hasLength(1));
+
+    // 瞬断报错：进入 buffering 并启动 800ms _retryTimer
+    backend.emitError('transient socket glitch');
+    await Future<void>.delayed(const Duration(milliseconds: 30));
+    expect(c.status, PlaybackStatus.buffering);
+
+    // 100ms 后底层 mpv 缓冲自行恢复并发出 playingStream(true)
+    backend.emitPlaying(true);
+    await Future<void>.delayed(const Duration(milliseconds: 30));
+    expect(c.status, PlaybackStatus.playing);
+
+    // 等过 800ms 重试窗口：openMedia 调用次数仍为 1，正常播放未被重连打断
+    await Future<void>.delayed(const Duration(milliseconds: 850));
+    expect(backend.openCalls, hasLength(1));
+  });
+
+  test('R2-M3: addExternalSubtitle 对已挂载外挂字幕直接复用选中不重复 sub-add，且字幕延迟限幅 ±60s',
+      () async {
+    final client = buildClient((endpoint, body) async {
+      if (endpoint == '/api/fs/list') {
+        return {
+          'code': 200,
+          'data': {
+            'content': [
+              {'name': 'ep1.mkv', 'is_dir': false, 'size': 1000},
+              {'name': 'ep1.chs.srt', 'is_dir': false, 'size': 10},
+            ],
+          },
+        };
+      }
+      final path = body['path'] as String? ?? '';
+      return {
+        'code': 200,
+        'data': {'name': path.split('/').last, 'raw_url': 'http://cdn$path', 'size': 100},
+      };
+    });
+
+    const item = QueueItem(path: '/dir/ep1.mkv', name: 'ep1.mkv', isVideo: true);
+    final c = PlaybackController(
+      api: () => client,
+      db: db,
+      settings: () => defaultSettings,
+      backend: backend,
+    );
+    addTearDown(c.dispose);
+
+    await c.replaceQueue(const [item], 0);
+    await Future<void>.delayed(const Duration(milliseconds: 30));
+    expect(backend.externalSubCalls, hasLength(1));
+
+    // 模拟 mpv 已将自动挂载的外挂字幕加入轨道列表
+    final extTrack = SubtitleTrack('3', 'ep1.chs.srt', null, uri: true);
+    backend.emitTracks(
+      Tracks(subtitle: [SubtitleTrack.auto(), SubtitleTrack.no(), extTrack]),
+      selected: Track(subtitle: SubtitleTrack.no()),
+    );
+    await Future<void>.delayed(Duration.zero);
+
+    // 再次请求手动加载同名外挂字幕：应直接调用 setSubtitleTrack 选中而非重复 sub-add
+    await c.addExternalSubtitle('ep1.chs.srt');
+    expect(backend.externalSubCalls, hasLength(1));
+    expect(backend.lastSubtitleSelected?.id, '3');
+    expect(c.currentSubtitle?.id, '3');
+
+    // 字幕延迟限幅在 [-60000, 60000]ms
+    await c.adjustSubDelay(999999);
+    expect(c.subDelayMs, 60000);
+    await c.adjustSubDelay(-999999);
+    expect(c.subDelayMs, -60000);
+  });
+
+  test('R3-M1: resumeSession 期间并发 replaceQueue 不会覆盖新曲目；error 态 seek 同步更新 retryPosition',
+      () async {
+    var failOpen = false;
+    final client = buildClient((endpoint, body) async {
+      final path = body['path'] as String? ?? '';
+      if (failOpen) {
+        throw const OpenListApiException('网络不可达', statusCode: 502);
+      }
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+      return {
+        'code': 200,
+        'data': {'name': path.split('/').last, 'raw_url': 'http://cdn$path', 'size': 100},
+      };
+    });
+
+    const saved = QueueItem(path: '/old.mp3', name: 'old.mp3', isVideo: false);
+    const fresh = QueueItem(path: '/fresh.mp3', name: 'fresh.mp3', isVideo: false);
+    await db.saveSession(
+      const [saved],
+      0,
+      const Duration(seconds: 40),
+      duration: const Duration(seconds: 200),
+    );
+
+    final c = PlaybackController(
+      api: () => client,
+      db: db,
+      settings: () => defaultSettings,
+      backend: backend,
+    );
+    addTearDown(c.dispose);
+
+    await c.restoreSession();
+    // 并发调用 resumeSession 与 replaceQueue：最终必须稳定停留在 fresh.mp3
+    final fResume = c.resumeSession();
+    final fReplace = c.replaceQueue(const [fresh], 0);
+    await Future.wait([fResume, fReplace]);
+    expect(c.current?.path, '/fresh.mp3');
+    expect(backend.openCalls.last.url, 'http://cdn/fresh.mp3');
+
+    // 模拟播放报错耗尽自动重试进入 error 态，在 error 态下外部 seek 更新断点后 retryNow
+    failOpen = true;
+    await c.replaceQueue(const [fresh], 0);
+    await Future<void>.delayed(const Duration(milliseconds: 1800));
+    expect(c.status, PlaybackStatus.error);
+
+    await c.seek(const Duration(seconds: 90));
+    expect(c.currentPosition, const Duration(seconds: 90));
+
+    failOpen = false;
+    await c.retryNow();
+    expect(backend.openCalls.last.start, const Duration(seconds: 90));
+  });
 }

@@ -23,14 +23,35 @@ enum PlaybackStatus { idle, opening, buffering, playing, paused, error }
 
 /// 播放器对外暴露的轨道描述（UI 用）
 class TrackDesc {
-  TrackDesc({required this.id, required this.title, required this.language, required this.isExternal});
+  const TrackDesc({
+    required this.id,
+    required this.title,
+    required this.language,
+    required this.isExternal,
+  });
   final String id;
   final String? title;
   final String? language;
   final bool isExternal;
 
   String get label => title ?? language ?? id;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is TrackDesc &&
+          other.id == id &&
+          other.title == title &&
+          other.language == language &&
+          other.isExternal == isExternal;
+
+  @override
+  int get hashCode => Object.hash(id, title, language, isExternal);
 }
+
+/// 生成按文件记忆轨道偏好的唯一复合键 `title||language||id`（消除多条同语言无标题轨道碰撞）。
+String trackPrefKey({String? title, String? language, required String id}) =>
+    '${title ?? ''}||${language ?? ''}||$id';
 
 class PlaybackController extends ChangeNotifier {
   PlaybackController({
@@ -139,6 +160,7 @@ class PlaybackController extends ChangeNotifier {
     _playingSub = _backend.playingStream.listen((playing) {
       if (!_isStreamActive) return;
       if (playing) {
+        _retryTimer?.cancel(); // 底层流已恢复播放，取消挂起的重连定时器防误打断
         _retryCount = 0; // 恢复成功，重置重试计数
         _handlingError = false;
         if (status == PlaybackStatus.buffering ||
@@ -283,53 +305,89 @@ class PlaybackController extends ChangeNotifier {
       _notify();
       return;
     }
-    // 先停掉定时器并等待旧队列进度落盘（不写旧会话），避免读写竞态与新会话被覆盖
+    // 同步递增 _openSerial 并快照旧曲目进度，防止快速连点切歌或切歌后立即 stop() 引发异步乱序覆盖
+    final serial = ++_openSerial;
+    _loadedSerial = -1;
     _progressTimer?.cancel();
     _retryTimer?.cancel();
-    await _recordProgressNow(saveSession: false);
+    final prevItem = current;
+    final prevPos = _lastPosition;
+    final prevDur = _lastDuration;
+    final prevPlaylistId = _sourcePlaylistId;
     _restoredPosition = null;
     _restoredDuration = null;
+    _lastPosition = Duration.zero;
+    _lastDuration = Duration.zero;
     _sourcePlaylistId = sourcePlaylistId;
     queue = items;
     index = startIndex.clamp(0, items.length - 1);
     _notify();
-    await _openCurrent();
+    await _recordProgressSnapshot(prevItem, prevPos, prevDur, prevPlaylistId);
+    if (serial != _openSerial || _disposed) return;
+    await _openCurrent(serial: serial);
   }
 
   Future<void> jumpTo(int i) async {
     if (i < 0 || i >= queue.length) return;
+    final serial = ++_openSerial;
+    _loadedSerial = -1;
     _progressTimer?.cancel();
     _retryTimer?.cancel();
-    await _recordProgressNow(saveSession: false);
+    final prevItem = current;
+    final prevPos = _lastPosition;
+    final prevDur = _lastDuration;
+    final prevPlaylistId = _sourcePlaylistId;
     _restoredPosition = null;
     _restoredDuration = null;
+    _lastPosition = Duration.zero;
+    _lastDuration = Duration.zero;
     index = i;
     _notify();
-    await _openCurrent();
+    await _recordProgressSnapshot(prevItem, prevPos, prevDur, prevPlaylistId);
+    if (serial != _openSerial || _disposed) return;
+    await _openCurrent(serial: serial);
   }
 
   Future<void> next() async {
     if (queue.isEmpty) return;
+    final serial = ++_openSerial;
+    _loadedSerial = -1;
     _progressTimer?.cancel();
     _retryTimer?.cancel();
-    await _recordProgressNow(saveSession: false);
+    final prevItem = current;
+    final prevPos = _lastPosition;
+    final prevDur = _lastDuration;
+    final prevPlaylistId = _sourcePlaylistId;
     _restoredPosition = null;
     _restoredDuration = null;
+    _lastPosition = Duration.zero;
+    _lastDuration = Duration.zero;
     index = _nextIndex();
     _notify();
-    await _openCurrent();
+    await _recordProgressSnapshot(prevItem, prevPos, prevDur, prevPlaylistId);
+    if (serial != _openSerial || _disposed) return;
+    await _openCurrent(serial: serial);
   }
 
   Future<void> previous() async {
     if (queue.isEmpty) return;
+    final serial = ++_openSerial;
+    _loadedSerial = -1;
     _progressTimer?.cancel();
     _retryTimer?.cancel();
-    await _recordProgressNow(saveSession: false);
+    final prevItem = current;
+    final prevPos = _lastPosition;
+    final prevDur = _lastDuration;
+    final prevPlaylistId = _sourcePlaylistId;
     _restoredPosition = null;
     _restoredDuration = null;
+    _lastPosition = Duration.zero;
+    _lastDuration = Duration.zero;
     index = _prevIndex();
     _notify();
-    await _openCurrent();
+    await _recordProgressSnapshot(prevItem, prevPos, prevDur, prevPlaylistId);
+    if (serial != _openSerial || _disposed) return;
+    await _openCurrent(serial: serial);
   }
 
   int _nextIndex() {
@@ -377,10 +435,11 @@ class PlaybackController extends ChangeNotifier {
 
   // ---------- 打开当前曲目 ----------
 
-  Future<void> _openCurrent({bool isRetry = false, Duration? forceStart}) async {
+  Future<void> _openCurrent({bool isRetry = false, Duration? forceStart, int? serial}) async {
     final item = current;
     if (item == null || _disposed) return;
-    final serial = ++_openSerial;
+    final activeSerial = serial ?? ++_openSerial;
+    if (activeSerial != _openSerial) return;
     _loadedSerial = -1; // 屏蔽旧媒体的残余流事件，直到新媒体调用 openMedia
     _retryTimer?.cancel();
     _progressTimer?.cancel();
@@ -402,13 +461,13 @@ class PlaybackController extends ChangeNotifier {
     try {
       await _backend.pause();
     } catch (_) {}
-    if (serial != _openSerial || _disposed) return;
+    if (activeSerial != _openSerial || _disposed) return;
 
     await (_bufferProfileInit ?? Future<void>.value());
-    if (serial != _openSerial || _disposed) return;
+    if (activeSerial != _openSerial || _disposed) return;
 
     _pendingPrefs = await _db.getTrackPrefs(item.path);
-    if (serial != _openSerial || _disposed) return;
+    if (activeSerial != _openSerial || _disposed) return;
     _audioPrefApplied = false;
     _subPrefApplied = false;
     subDelayMs = _pendingPrefs?.subDelayMs ?? 0;
@@ -419,7 +478,7 @@ class PlaybackController extends ChangeNotifier {
       _sourcePlaylistId = null;
       playlistId = null;
     }
-    if (serial != _openSerial || _disposed) return;
+    if (activeSerial != _openSerial || _disposed) return;
 
     // 起始位置：重试→最近位置（绝不回片头）；会话恢复→forceStart；
     // 否则读进度续播（播单播放读该播单的独立进度，其它读全局；已看完/≥95% 视为看完从头播）
@@ -452,14 +511,14 @@ class PlaybackController extends ChangeNotifier {
     }
 
     try {
-      if (serial != _openSerial || _disposed) return;
+      if (activeSerial != _openSerial || _disposed) return;
       // 播单来源：更新续播指针（"本播单上次播到这个文件"），详情页"继续播放"据此定位到具体条目
       if (playlistId != null) {
         await _writePlaylist(() => _db.setPlaylistLastPlayed(playlistId!, item.path));
-        if (serial != _openSerial || _disposed) return;
+        if (activeSerial != _openSerial || _disposed) return;
       }
       final link = await _api().getFileLink(item.path);
-      if (serial != _openSerial || _disposed) return;
+      if (activeSerial != _openSerial || _disposed) return;
       if (kDebugMode) {
         final safeUri = Uri.tryParse(link.url);
         final hostInfo = safeUri != null ? '${safeUri.scheme}://${safeUri.authority}${safeUri.path}' : item.name;
@@ -468,24 +527,24 @@ class PlaybackController extends ChangeNotifier {
       if (start != null && start > Duration.zero) {
         _lastPosition = start;
       }
-      _loadedSerial = serial;
+      _loadedSerial = activeSerial;
       await _backend.openMedia(
         link.url,
         headers: link.headers,
         start: start,
         play: true,
       );
-      if (serial != _openSerial || _disposed) return;
+      if (activeSerial != _openSerial || _disposed) return;
       await _backend.setRate(_speed);
       await _applySubDelay();
-      unawaited(_attachExternalSubs(serial, item)); // 不阻塞开播
+      unawaited(_attachExternalSubs(activeSerial, item)); // 不阻塞开播
       _startProgressTimer();
       await _db.touchHistory(item);
       await _saveSessionNow();
     } catch (e) {
-      if (serial != _openSerial || _disposed) return;
+      if (activeSerial != _openSerial || _disposed) return;
       // 打开失败（直链获取失败等）走同一重试策略
-      _onOpenFailure(serial, e);
+      _onOpenFailure(activeSerial, e);
     }
   }
 
@@ -509,13 +568,22 @@ class PlaybackController extends ChangeNotifier {
       final hasEmbedded = _backend.currentTracks.subtitle
           .any((t) => t.id != 'auto' && t.id != 'no' && !t.uri);
       final noSubPref = _pendingPrefs?.subtitleTrack == null;
+      var autoSelectedFirst = false;
       for (var i = 0; i < matches.length; i++) {
         final subName = matches[i];
-        final link = await _api().getFileLink(joinPath(item.parent, subName));
-        if (serial != _openSerial || _disposed) return;
-        // 第一个匹配：无内置字幕且无记忆选择时直接选中
-        final flag = (i == 0 && !hasEmbedded && noSubPref && !_subPrefApplied) ? 'select' : 'auto';
-        await _backend.addExternalSub(link.url, flag, subName, headers: link.headers);
+        try {
+          final link = await _api().getFileLink(joinPath(item.parent, subName));
+          if (serial != _openSerial || _disposed) return;
+          // 第一个成功挂载的外挂字幕：无内置字幕且无记忆选择时直接选中
+          final shouldSelect = !autoSelectedFirst && !hasEmbedded && noSubPref && !_subPrefApplied;
+          final flag = shouldSelect ? 'select' : 'auto';
+          await _backend.addExternalSub(link.url, flag, subName, headers: link.headers);
+          if (shouldSelect) autoSelectedFirst = true;
+        } catch (e) {
+          // 单条外挂字幕直链或加载失败不阻断同目录其余字幕继续加载
+          debugPrint('[OLP] external sub skipped ($subName): $e');
+          if (serial != _openSerial || _disposed) return;
+        }
       }
       if (serial != _openSerial || _disposed) return;
       _maybeApplyTrackPrefs();
@@ -564,24 +632,32 @@ class PlaybackController extends ChangeNotifier {
     if (item == null || prefs == null) return;
     final tracks = _backend.currentTracks;
     if (!_audioPrefApplied && prefs.audioTrack != null) {
+      final target = prefs.audioTrack!;
       final match = tracks.audio
-          .where((x) => (x.title ?? x.language ?? x.id) == prefs.audioTrack)
-          .firstOrNull;
+              .where((x) => trackPrefKey(title: x.title, language: x.language, id: x.id) == target)
+              .firstOrNull ??
+          tracks.audio
+              .where((x) => (x.title ?? x.language ?? x.id) == target)
+              .firstOrNull;
       if (match != null) {
         _audioPrefApplied = true;
         unawaited(_backend.setAudioTrack(match));
       }
     }
     if (!_subPrefApplied && prefs.subtitleTrack != null) {
-      if (prefs.subtitleTrack!.isEmpty) {
+      final target = prefs.subtitleTrack!;
+      if (target.isEmpty) {
         // 用户上次显式关闭了字幕：强制关闭以压制内置默认字幕
         _subPrefApplied = true;
         currentSubtitle = null;
         unawaited(_backend.setSubtitleTrack(SubtitleTrack.no()));
       } else {
         final match = tracks.subtitle
-            .where((x) => (x.title ?? x.language ?? x.id) == prefs.subtitleTrack)
-            .firstOrNull;
+                .where((x) => trackPrefKey(title: x.title, language: x.language, id: x.id) == target)
+                .firstOrNull ??
+            tracks.subtitle
+                .where((x) => x.title == target || (x.title ?? x.language ?? x.id) == target)
+                .firstOrNull;
         if (match != null) {
           _subPrefApplied = true;
           unawaited(_backend.setSubtitleTrack(match));
@@ -594,44 +670,57 @@ class PlaybackController extends ChangeNotifier {
   }
 
   Future<void> selectAudioTrack(TrackDesc t) async {
+    final item = current;
+    if (item == null) return;
+    final serial = _openSerial;
     final match = _backend.currentTracks.audio.where((x) => x.id == t.id).firstOrNull;
     if (match == null) return;
     await _backend.setAudioTrack(match);
+    if (serial != _openSerial || _disposed) return;
     currentAudio = audioTracks.where((x) => x.id == t.id).firstOrNull ?? t;
-    final item = current;
-    if (item != null) {
-      await _db.saveTrackPrefs(item.path, audioTrack: _trackKeyOfDesc(t));
-    }
+    await _db.saveTrackPrefs(item.path, audioTrack: _trackKeyOfDesc(t));
     _notify();
   }
 
   Future<void> selectSubtitleTrack(TrackDesc? t) async {
+    final item = current;
+    if (item == null) return;
+    final serial = _openSerial;
     if (t == null) {
       await _backend.setSubtitleTrack(SubtitleTrack.no());
+      if (serial != _openSerial || _disposed) return;
       currentSubtitle = null;
     } else {
       final match = _backend.currentTracks.subtitle.where((x) => x.id == t.id).firstOrNull;
       if (match == null) return;
       await _backend.setSubtitleTrack(match);
+      if (serial != _openSerial || _disposed) return;
       currentSubtitle = subtitleTracks.where((x) => x.id == t.id).firstOrNull ?? t;
     }
-    final item = current;
-    if (item != null) {
-      await _db.saveTrackPrefs(item.path, subtitleTrack: t == null ? '' : _trackKeyOfDesc(t));
-    }
+    await _db.saveTrackPrefs(item.path, subtitleTrack: t == null ? '' : _trackKeyOfDesc(t));
     _notify();
   }
 
-  String _trackKeyOfDesc(TrackDesc t) => t.title ?? t.language ?? t.id;
+  String _trackKeyOfDesc(TrackDesc t) =>
+      // 外挂字幕在重新加载时 mpv 分配的数字轨道 id 可能随内置轨道变化，优先按外挂文件名匹配；内置轨道使用完整复合键避免同语言冲突
+      (t.isExternal && t.title != null && t.title!.isNotEmpty)
+          ? t.title!
+          : trackPrefKey(title: t.title, language: t.language, id: t.id);
 
-  /// 手动加载同目录某字幕文件（携带直链 headers 选中并记忆）
+  /// 手动加载同目录某字幕文件（若已挂载则直接选中复用，否则携带直链 headers 加载并记忆）
   Future<void> addExternalSubtitle(String fileName) async {
     final item = current;
     if (item == null) return;
+    final existing = subtitleTracks.where((t) => t.isExternal && t.title == fileName).firstOrNull;
+    if (existing != null) {
+      await selectSubtitleTrack(existing);
+      return;
+    }
     final serial = _openSerial;
     final link = await _api().getFileLink(joinPath(item.parent, fileName));
     if (serial != _openSerial || _disposed || current?.path != item.path) return;
     await _backend.addExternalSub(link.url, 'select', fileName, headers: link.headers);
+    if (serial != _openSerial || _disposed) return;
     await _db.saveTrackPrefs(item.path, subtitleTrack: fileName);
     // 先乐观展示选中态，待 mpv 解析完 track-list / sid 后由 _updateTracks 自动对齐真实轨道 id
     currentSubtitle = subtitleTracks.where((t) => t.title == fileName).firstOrNull ??
@@ -642,11 +731,13 @@ class PlaybackController extends ChangeNotifier {
   // ---------- 字幕延迟 ----------
 
   Future<void> adjustSubDelay(int deltaMs) async {
-    subDelayMs += deltaMs;
-    await _applySubDelay();
     final item = current;
-    if (item != null) await _db.saveTrackPrefs(item.path, subDelayMs: subDelayMs);
+    final serial = _openSerial;
+    subDelayMs = (subDelayMs + deltaMs).clamp(-60000, 60000);
     _notify();
+    await _applySubDelay();
+    if (serial != _openSerial || _disposed) return;
+    if (item != null) await _db.saveTrackPrefs(item.path, subDelayMs: subDelayMs);
   }
 
   Future<void> _applySubDelay() => _backend.setSubDelaySeconds(subDelayMs / 1000.0);
@@ -701,8 +792,29 @@ class PlaybackController extends ChangeNotifier {
   }
 
   Future<void> seek(Duration position) async {
-    await _backend.seek(position);
-    _lastPosition = position;
+    final clamped = position < Duration.zero
+        ? Duration.zero
+        : (_lastDuration > Duration.zero && position > _lastDuration
+            ? _lastDuration
+            : position);
+    if (status == PlaybackStatus.idle) {
+      // 冷启动恢复会话但尚未开播时发生拖动/外部 seek：同步更新待恢复断点
+      _restoredPosition = clamped;
+      _lastPosition = clamped;
+      unawaited(_saveSessionNow());
+      _notify();
+      return;
+    }
+    if (status == PlaybackStatus.error || status == PlaybackStatus.opening) {
+      // 错误态或尚未加载底层媒体时：更新记录位置与重试断点，不向未就绪的引擎发无效 seek
+      _retryPosition = clamped;
+      _lastPosition = clamped;
+      unawaited(_saveSessionNow());
+      _notify();
+      return;
+    }
+    await _backend.seek(clamped);
+    _lastPosition = clamped;
     unawaited(_saveSessionNow());
     _notify();
   }
@@ -747,7 +859,9 @@ class PlaybackController extends ChangeNotifier {
       _lastPosition = Duration.zero;
       await _backend.seek(Duration.zero);
       await _backend.play();
+      if (serial != _openSerial || _disposed) return;
       _startProgressTimer();
+      unawaited(_saveSessionNow());
       return;
     }
     if (queue.length > 1 || (index < queue.length - 1)) {
@@ -757,11 +871,15 @@ class PlaybackController extends ChangeNotifier {
       _notify();
       await _openCurrent();
     } else if (queue.length == 1) {
-      // 单曲队列播完：停在开头
+      // 单曲队列播完：停在开头并同步刷新暂停态与归零位置
       _lastPosition = Duration.zero;
       await _backend.seek(Duration.zero);
       await _backend.pause();
-      unawaited(_saveSessionNow());
+      if (!_disposed && serial == _openSerial) {
+        status = PlaybackStatus.paused;
+        unawaited(_saveSessionNow());
+        _notify();
+      }
     }
   }
 
@@ -816,9 +934,14 @@ class PlaybackController extends ChangeNotifier {
       await stop();
       return;
     }
+    final serial = ++_openSerial;
+    _loadedSerial = -1;
+    _progressTimer?.cancel();
+    _lastPosition = Duration.zero;
+    _lastDuration = Duration.zero;
     index = _nextIndex();
     _notify();
-    await _openCurrent();
+    await _openCurrent(serial: serial);
   }
 
   Future<void> stop() async {
@@ -841,12 +964,13 @@ class PlaybackController extends ChangeNotifier {
     _progressTimer = Timer.periodic(const Duration(seconds: 5), (_) => _recordProgressNow());
   }
 
-  Future<void> _recordProgressNow({bool saveSession = true}) async {
-    final item = current;
+  Future<void> _recordProgressSnapshot(
+    QueueItem? item,
+    Duration pos,
+    Duration dur,
+    int? playlistId,
+  ) async {
     if (item == null) return;
-    final pos = _lastPosition;
-    final dur = _lastDuration;
-    final playlistId = _sourcePlaylistId;
     if (ProgressRules.shouldRecord(dur)) {
       if (ProgressRules.isFinished(pos, dur)) {
         await _db.clearProgress(item.path);
@@ -862,6 +986,12 @@ class PlaybackController extends ChangeNotifier {
         }
       }
     }
+  }
+
+  Future<void> _recordProgressNow({bool saveSession = true}) async {
+    final item = current;
+    if (item == null) return;
+    await _recordProgressSnapshot(item, _lastPosition, _lastDuration, _sourcePlaylistId);
     if (saveSession) {
       await _saveSessionNow();
     }
@@ -919,34 +1049,41 @@ class PlaybackController extends ChangeNotifier {
   /// 继续/开始播放恢复的会话
   Future<void> resumeSession() async {
     final item = current;
-    if (item == null) return;
+    if (item == null || _disposed) return;
+    final serial = ++_openSerial;
+    _loadedSerial = -1;
+    final wasIdle = status == PlaybackStatus.idle;
     final pos = _restoredPosition;
     final savedDur = _restoredDuration ?? Duration.zero;
     _restoredPosition = null;
     _restoredDuration = null;
-    if (pos != null && pos > Duration.zero && status == PlaybackStatus.idle) {
+    if (pos != null && pos > Duration.zero && wasIdle) {
       var playlistId = _sourcePlaylistId;
       if (playlistId != null && !await _db.playlistExists(playlistId)) {
+        if (serial != _openSerial || _disposed) return;
         _sourcePlaylistId = null;
         playlistId = null;
       }
+      if (serial != _openSerial || _disposed) return;
       var durMs = playlistId != null
           ? (await _db.getPlaylistProgress(playlistId, item.path))?.durationMs ?? 0
           : (await _db.getProgress(item.path))?.durationMs ?? 0;
+      if (serial != _openSerial || _disposed) return;
       if (durMs <= 0 && savedDur > Duration.zero) {
         durMs = savedDur.inMilliseconds;
       }
       if (durMs > 0 && pos.inMilliseconds / durMs < ProgressRules.finishedThreshold) {
-        await _openCurrent(forceStart: pos);
+        await _openCurrent(forceStart: pos, serial: serial);
         return;
       }
       if (durMs <= 0) {
         // 首次打开尚未解析出总时长就拖动保存了断点：直接信任会话保存的位置续播
-        await _openCurrent(forceStart: pos);
+        await _openCurrent(forceStart: pos, serial: serial);
         return;
       }
     }
-    await _openCurrent();
+    if (serial != _openSerial || _disposed) return;
+    await _openCurrent(serial: serial);
   }
 
   /// App 退到后台/被杀前的落盘钩子

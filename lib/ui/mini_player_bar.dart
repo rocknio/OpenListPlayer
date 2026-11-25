@@ -1,6 +1,8 @@
 /// 底部常驻 mini 播放条（按 Arudio 设计稿：白色圆角卡片 + 陶土进度 + 圆形播放键）。
 library;
 
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -44,6 +46,9 @@ class MiniPlayerBar extends ConsumerWidget {
               child: InkWell(
                 borderRadius: BorderRadius.circular(20),
                 onTap: () {
+                  if (playback.status == PlaybackStatus.idle) {
+                    unawaited(playback.resumeSession());
+                  }
                   Navigator.of(context).push(MaterialPageRoute<void>(
                     builder: (_) => item.isVideo ? const PlayerScreen() : const AudioPage(),
                   ));
@@ -162,7 +167,10 @@ class _PlayPauseButton extends StatelessWidget {
     return StreamBuilder<bool>(
       stream: playback.playingStream,
       builder: (context, snap) {
-        final playing = snap.data ?? playback.isPlaying;
+        final rawPlaying = snap.data ?? playback.isPlaying;
+        final playing = rawPlaying &&
+            playback.status != PlaybackStatus.error &&
+            playback.status != PlaybackStatus.idle;
         return Semantics(
           button: true,
           label: playing ? '暂停' : '播放',

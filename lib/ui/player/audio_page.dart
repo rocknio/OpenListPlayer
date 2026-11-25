@@ -2,6 +2,8 @@
 /// 米白底 + 陶土主色 + 大号墨色标题 + 环形进度滑块 + 圆形播放键 + 队列卡片。
 library;
 
+import 'dart:async' show unawaited;
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
@@ -12,6 +14,7 @@ import '../../providers.dart';
 import '../widgets.dart';
 import 'audio_theme.dart';
 import 'panels.dart';
+import 'player_screen.dart';
 
 class AudioPage extends ConsumerStatefulWidget {
   const AudioPage({super.key});
@@ -27,6 +30,7 @@ class _AudioPageState extends ConsumerState<AudioPage> {
   String? _lastItemPath;
   double? _dragMs;
   bool _wakelockActive = false;
+  bool _switchingRoute = false;
 
   @override
   void didChangeDependencies() {
@@ -42,9 +46,24 @@ class _AudioPageState extends ConsumerState<AudioPage> {
   void _onPlaybackChanged() {
     if (!mounted) return;
     _syncWakelock();
-    final curPath = _playback?.current?.path;
+    final cur = _playback?.current;
+    final curPath = cur?.path;
     final switched = curPath != _lastItemPath;
     if (switched) _lastItemPath = curPath;
+    if (!_switchingRoute && cur != null && cur.isVideo) {
+      _switchingRoute = true;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        if (ModalRoute.of(context)?.isCurrent == true && _playback?.current?.isVideo == true) {
+          Navigator.of(context).pushReplacement(
+            MaterialPageRoute<void>(builder: (_) => const PlayerScreen()),
+          );
+        } else {
+          _switchingRoute = false;
+        }
+      });
+      return;
+    }
     if (_dragMs != null && (switched || _playback?.status == PlaybackStatus.opening)) {
       _dragMs = null;
       WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -60,13 +79,11 @@ class _AudioPageState extends ConsumerState<AudioPage> {
         s == PlaybackStatus.playing;
     if (shouldWake == _wakelockActive) return;
     _wakelockActive = shouldWake;
-    try {
-      if (shouldWake) {
-        WakelockPlus.enable();
-      } else {
-        WakelockPlus.disable();
-      }
-    } catch (_) {}
+    if (shouldWake) {
+      unawaited(WakelockPlus.enable().catchError((_) {}));
+    } else {
+      unawaited(WakelockPlus.disable().catchError((_) {}));
+    }
   }
 
   @override
@@ -74,9 +91,7 @@ class _AudioPageState extends ConsumerState<AudioPage> {
     _playback?.removeListener(_onPlaybackChanged);
     _scroll.dispose();
     if (_wakelockActive) {
-      try {
-        WakelockPlus.disable();
-      } catch (_) {}
+      unawaited(WakelockPlus.disable().catchError((_) {}));
     }
     super.dispose();
   }
@@ -361,7 +376,10 @@ class _AudioPageState extends ConsumerState<AudioPage> {
     return StreamBuilder<bool>(
       stream: playback.playingStream,
       builder: (context, snap) {
-        final playing = snap.data ?? playback.isPlaying;
+        final rawPlaying = snap.data ?? playback.isPlaying;
+        final playing = rawPlaying &&
+            playback.status != PlaybackStatus.error &&
+            playback.status != PlaybackStatus.idle;
         final busy = playback.status == PlaybackStatus.buffering ||
             playback.status == PlaybackStatus.opening;
         return Semantics(
