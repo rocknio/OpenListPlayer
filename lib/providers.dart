@@ -45,6 +45,7 @@ class AppSettingsNotifier extends Notifier<AppSettings> {
   Future<void> setDefaultPlayMode(PlayMode mode) async {
     await _svc.saveDefaultPlayMode(mode);
     state = _svc.load();
+    ref.read(playbackProvider).onSettingsChanged();
   }
 
   Future<void> setVideoBackgroundAudio(bool v) async {
@@ -60,6 +61,12 @@ class AppSettingsNotifier extends Notifier<AppSettings> {
 
   Future<void> setGlobalSpeed(double s) async {
     await _svc.saveGlobalSpeed(s);
+    state = _svc.load();
+    await ref.read(playbackProvider).setSpeed(state.globalSpeed);
+  }
+
+  Future<void> setThemePreference(AppThemePreference pref) async {
+    await _svc.saveThemePreference(pref);
     state = _svc.load();
   }
 }

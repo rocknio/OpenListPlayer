@@ -8,7 +8,9 @@ import '../../core/models.dart';
 import '../../core/playlist_resume.dart';
 import '../../data/app_database.dart';
 import '../../providers.dart';
+import '../app_theme.dart';
 import '../browser/browser_page.dart';
+import '../icons.dart';
 import '../player/audio_page.dart';
 import '../player/player_screen.dart';
 import '../widgets.dart';
@@ -27,6 +29,7 @@ class _PlaylistDetailPageState extends ConsumerState<PlaylistDetailPage> {
   late final Stream<PlaylistState?> _stateStream;
   late final Stream<List<PlaylistProgress>> _progressStream;
   late final Stream<List<PlaylistItem>> _itemsStream;
+  bool _openingPlayer = false;
 
   @override
   void initState() {
@@ -38,22 +41,30 @@ class _PlaylistDetailPageState extends ConsumerState<PlaylistDetailPage> {
   }
 
   Future<void> _play(List<PlaylistItem> items, int startIndex) async {
-    final playback = ref.read(playbackProvider);
-    final queue = items
-        .map((e) => QueueItem(
-              path: e.path,
-              name: e.name,
-              isVideo: e.isVideo,
-              size: e.size,
-              thumb: e.thumb,
-            ))
-        .toList();
-    // 播放 = 复制为"正在播放"队列（播单本体不动），带来源 id 以使用本播单独立进度
-    await playback.playQueue(queue, startIndex, playlistId: widget.playlistId);
-    if (!mounted) return;
-    Navigator.of(context).push(MaterialPageRoute<void>(
-      builder: (_) => queue[startIndex].isVideo ? const PlayerScreen() : const AudioPage(),
-    ));
+    if (_openingPlayer || items.isEmpty) return;
+    _openingPlayer = true;
+    try {
+      final playback = ref.read(playbackProvider);
+      final queue = items
+          .map((e) => QueueItem(
+                path: e.path,
+                name: e.name,
+                isVideo: e.isVideo,
+                size: e.size,
+                thumb: e.thumb,
+              ))
+          .toList();
+      final safeStart = startIndex.clamp(0, queue.length - 1);
+      // 播放 = 复制为"正在播放"队列（播单本体不动），带来源 id 以使用本播单独立进度
+      await playback.playQueue(queue, safeStart, playlistId: widget.playlistId);
+      if (!mounted) return;
+      final active = playback.current ?? queue[safeStart];
+      await Navigator.of(context).push(buildPlayerSheetRoute<void>(
+        active.isVideo ? const PlayerScreen() : const AudioPage(),
+      ));
+    } finally {
+      _openingPlayer = false;
+    }
   }
 
   /// 进入文件浏览器为本播单挑选文件
@@ -227,31 +238,62 @@ class _PlaylistDetailPageState extends ConsumerState<PlaylistDetailPage> {
             ? '$percent% · ${formatDuration(Duration(milliseconds: p.positionMs))} / ${formatDuration(Duration(milliseconds: p.durationMs))}'
             : formatFileSize(it.size);
     final cs = Theme.of(context).colorScheme;
+    final sand = AppPalette.sandOf(context);
+    final accent = AppPalette.accentOf(context);
+    final muted = AppPalette.mutedOf(context);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         ListTile(
           dense: true,
-          leading: Icon(
-            it.isVideo ? Icons.movie_outlined : Icons.music_note_outlined,
-            color: isLastPlayed ? cs.primary : null,
+          leading: Container(
+            width: 36,
+            height: 36,
+            decoration: BoxDecoration(
+              color: isLastPlayed ? accent.withValues(alpha: 0.14) : sand,
+              borderRadius: BorderRadius.circular(10),
+            ),
+            alignment: Alignment.center,
+            child: Icon(
+              it.isVideo ? AppIcons.movie : AppIcons.musicNote,
+              size: 18,
+              color: isLastPlayed ? accent : muted,
+            ),
           ),
           title: Row(
             children: [
-              Expanded(child: Text(it.name, maxLines: 1, overflow: TextOverflow.ellipsis)),
+              Expanded(
+                child: Text(
+                  it.name,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontWeight: isLastPlayed ? FontWeight.w600 : FontWeight.w500,
+                    color: isLastPlayed ? accent : null,
+                  ),
+                ),
+              ),
               if (isLastPlayed) ...[
                 const SizedBox(width: 8),
                 const _LastPlayedTag(),
+              ] else if (finished) ...[
+                const SizedBox(width: 8),
+                const ToneBadge(label: '已看完', success: true, icon: AppIcons.check),
               ],
             ],
           ),
-          subtitle: Text(sub, maxLines: 1, overflow: TextOverflow.ellipsis),
+          subtitle: Text(
+            sub,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(fontFeatures: kTabularFigures),
+          ),
           onTap: onTap,
         ),
         if (!finished && ratio > 0)
           LinearProgressIndicator(
             value: ratio,
-            minHeight: 2,
+            minHeight: 2.5,
             color: cs.primary,
             backgroundColor: Colors.transparent,
           ),

@@ -17,7 +17,12 @@ class OpenListApiException implements Exception {
 
 class OpenListClient {
   OpenListClient({required this.site, Dio? dio})
-      : _dio = dio ?? Dio(BaseOptions(connectTimeout: const Duration(seconds: 10), receiveTimeout: const Duration(seconds: 30))) {
+      : _dio = dio ??
+            Dio(BaseOptions(
+              connectTimeout: const Duration(seconds: 10),
+              sendTimeout: const Duration(seconds: 15),
+              receiveTimeout: const Duration(seconds: 30),
+            )) {
     _dio.options.baseUrl = _normalizeBase(site.baseUrl);
   }
 
@@ -30,6 +35,37 @@ class OpenListClient {
       s = s.substring(0, s.length - 1);
     }
     return s;
+  }
+
+  /// 将存储驱动返回的可能为协议相对或站内相对路径的 URL（如 `//cdn...`、`/d/...`）补全为完整绝对 URL。
+  String _resolveUrl(String raw) {
+    final trimmed = raw.trim();
+    if (trimmed.isEmpty) return '';
+    final lower = trimmed.toLowerCase();
+    if (lower.startsWith('http://') || lower.startsWith('https://')) {
+      return trimmed;
+    }
+    final base = _dio.options.baseUrl;
+    if (trimmed.startsWith('//')) {
+      final baseUri = Uri.tryParse(base);
+      final scheme = (baseUri != null && baseUri.hasScheme) ? baseUri.scheme : 'https';
+      return '$scheme:$trimmed';
+    }
+    if (trimmed.startsWith('/')) {
+      final baseUri = Uri.tryParse(base);
+      if (baseUri != null && baseUri.hasScheme && baseUri.host.isNotEmpty) {
+        final origin = '${baseUri.scheme}://${baseUri.authority}';
+        final basePath = baseUri.path;
+        // 兼容子路径反代部署（如 http://host/alist 返回 /alist/d/... 时不重复拼 /alist）
+        if (basePath.isNotEmpty &&
+            basePath != '/' &&
+            (trimmed == basePath || trimmed.startsWith('$basePath/'))) {
+          return '$origin$trimmed';
+        }
+      }
+      return '$base$trimmed';
+    }
+    return trimmed;
   }
 
   void close() => _dio.close();
@@ -48,8 +84,9 @@ class OpenListClient {
   Future<int> testConnection() async {
     _ensureConfigured();
     final pong = await _dio.get<String>('/ping');
-    if (pong.statusCode != 200 || pong.data != 'pong') {
-      final snippet = (pong.data ?? '').length > 120 ? '${pong.data!.substring(0, 120)}...' : pong.data;
+    if (pong.statusCode != 200 || pong.data?.trim() != 'pong') {
+      final raw = pong.data ?? '';
+      final snippet = raw.length > 120 ? '${raw.substring(0, 120)}...' : raw;
       throw OpenListApiException('服务响应异常: $snippet');
     }
     final entries = await listDir('/');
@@ -76,7 +113,7 @@ class OpenListClient {
   }
 
   Future<List<FsEntry>> _listDir(String path, {required bool refresh}) async {
-    final resp = await _dio.post<Map<String, dynamic>>(
+    final resp = await _dio.post<dynamic>(
       '/api/fs/list',
       data: {
         'path': path,
@@ -88,11 +125,13 @@ class OpenListClient {
       options: Options(headers: _authHeaders),
     );
     final body = _unwrap(resp.data);
-    final content = (body['content'] as List<dynamic>? ?? [])
-        .map((e) => e as Map<String, dynamic>)
-        .map(_toEntry)
+    final rawContent = body['content'];
+    if (rawContent is! List) return [];
+    return rawContent
+        .whereType<Map<dynamic, dynamic>>()
+        .map((e) => _toEntry(Map<String, dynamic>.from(e)))
+        .where((e) => e.name.isNotEmpty)
         .toList();
-    return content;
   }
 
   FsEntry _toEntry(Map<String, dynamic> e) => FsEntry(
@@ -100,34 +139,38 @@ class OpenListClient {
         isDirectory: (e['is_dir'] as bool? ?? false) || (e['type'] == 1),
         size: (e['size'] as num?)?.toInt() ?? 0,
         modified: DateTime.tryParse(e['modified']?.toString() ?? ''),
-        thumb: e['thumb']?.toString() ?? '',
+        thumb: _resolveUrl(e['thumb']?.toString() ?? ''),
       );
 
-  Map<String, dynamic> _unwrap(Map<String, dynamic>? body) {
-    if (body == null) throw const OpenListApiException('空响应');
+  Map<String, dynamic> _unwrap(dynamic rawBody) {
+    if (rawBody == null) throw const OpenListApiException('空响应');
+    if (rawBody is! Map) {
+      throw const OpenListApiException('服务响应格式异常（非 JSON 对象）');
+    }
+    final body = Map<String, dynamic>.from(rawBody);
     final code = (body['code'] as num?)?.toInt() ?? -1;
     if (code != 200) {
       throw OpenListApiException(body['message']?.toString() ?? '未知错误', statusCode: code);
     }
     final data = body['data'];
-    return data is Map<String, dynamic> ? data : {};
+    return data is Map ? Map<String, dynamic>.from(data) : {};
   }
 
   /// 取文件直链信息（raw_url 可能带签名；header 为部分驱动要求的请求头）。
   Future<FileLink> getFileLink(String path) async {
     _ensureConfigured();
-    final resp = await _dio.post<Map<String, dynamic>>(
+    final resp = await _dio.post<dynamic>(
       '/api/fs/get',
       data: {'path': path, 'password': ''},
       options: Options(headers: _authHeaders),
     );
     final body = _unwrap(resp.data);
-    var rawUrl = body['raw_url'] as String? ?? '';
+    var rawUrl = _resolveUrl(body['raw_url']?.toString() ?? '');
     if (rawUrl.isEmpty) {
-      // 兜底：走 OpenList 代理下载地址，按路径段逐段编码避免 # / ? / % 截断或损坏
-      final sign = body['sign'] as String? ?? '';
-      final normalizedPath = path.startsWith('/') ? path : '/$path';
-      final encodedPath = normalizedPath.split('/').map(Uri.encodeComponent).join('/');
+      // 兜底：走 OpenList 代理下载地址，按非空路径段逐段编码避免 # / ? / % 截断或损坏
+      final sign = body['sign']?.toString() ?? '';
+      final segments = path.split('/').where((s) => s.isNotEmpty).map(Uri.encodeComponent).join('/');
+      final encodedPath = segments.isEmpty ? '' : '/$segments';
       final query = sign.isEmpty ? '' : '?sign=${Uri.encodeQueryComponent(sign)}';
       rawUrl = '${_dio.options.baseUrl}/d$encodedPath$query';
     }
@@ -147,12 +190,29 @@ class OpenListClient {
         }
       });
     }
+    final fallbackName = path.split('/').where((s) => s.isNotEmpty).lastOrNull ?? '';
     return FileLink(
       url: rawUrl,
       headers: headers,
-      name: body['name']?.toString() ?? path.split('/').last,
+      name: body['name']?.toString() ?? fallbackName,
       size: (body['size'] as num?)?.toInt() ?? 0,
     );
+  }
+
+  /// 读取小型纯文本文件（如 .lrc 歌词），限制最大字节数避免误拉大文件。
+  Future<String> fetchTextFile(String path, {int maxBytes = 256 * 1024}) async {
+    final link = await getFileLink(path);
+    if (link.size > 0 && link.size > maxBytes) {
+      throw const OpenListApiException('文本文件过大，跳过加载');
+    }
+    final resp = await _dio.get<String>(
+      link.url,
+      options: Options(
+        headers: link.headers,
+        responseType: ResponseType.plain,
+      ),
+    );
+    return resp.data ?? '';
   }
 }
 

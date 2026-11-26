@@ -36,6 +36,22 @@ void main() {
     test('忽略大小写', () {
       expect(compareNatural('ABC', 'abc'), 0);
     });
+
+    test('超长数字段（超过 64 位整数上限）与全零块比较准确无溢出', () {
+      const a = 'ep0009999999999999999999999999998.mp4';
+      const b = 'ep9999999999999999999999999999.mp4';
+      const c = 'ep10000000000000000000000000000.mp4';
+      expect(compareNatural(a, b), lessThan(0));
+      expect(compareNatural(b, c), lessThan(0));
+      expect(compareNatural('track000_end', 'track0_end'), 0);
+      expect(compareNatural('track000_a', 'track0_b'), lessThan(0));
+    });
+
+    test('数字块排在非数字块之前', () {
+      final names = ['ep_special.mkv', 'ep1.mkv'];
+      names.sort(compareNatural);
+      expect(names, ['ep1.mkv', 'ep_special.mkv']);
+    });
   });
 
   group('媒体扩展名判定', () {
@@ -72,6 +88,14 @@ void main() {
 
     test('vtt 与 ass 均支持', () {
       expect(matchSubtitleFiles('a.mp4', ['a.ass', 'a.vtt']), ['a.ass', 'a.vtt']);
+    });
+
+    test('忽略大小写匹配主名，且精确同名始终优先于带后缀字幕', () {
+      final m = matchSubtitleFiles(
+        'Movie.MKV',
+        ['MOVIE.chs.srt', 'movie.srt', 'Movie.eng.ass', 'Movie.MKV'],
+      );
+      expect(m, ['movie.srt', 'MOVIE.chs.srt', 'Movie.eng.ass']);
     });
   });
 
@@ -190,6 +214,28 @@ void main() {
         locatePlaylistResume(paths: [], lastPlayedPath: 'a', playedPaths: {'a'}, finishedPaths: {}),
         (index: 0, hasProgress: false),
       );
+    });
+  });
+
+  group('R2-M2: SiteConfig.tryNormalizeUrl 边界校验与规整', () {
+    test('剥离 Web 端粘贴带入的 #fragment、末尾斜杠并小写化 scheme', () {
+      expect(
+        SiteConfig.tryNormalizeUrl('  Http://192.168.2.29:5244/#/天翼云盘/视频  '),
+        'http://192.168.2.29:5244',
+      );
+      expect(
+        SiteConfig.tryNormalizeUrl('HTTPS://nas.example.com:8443/alist///#/'),
+        'https://nas.example.com:8443/alist',
+      );
+    });
+
+    test('拒绝含 ?query、userInfo、非法协议或越界端口的地址', () {
+      expect(SiteConfig.tryNormalizeUrl('http://localhost:5244?token=abc'), isNull);
+      expect(SiteConfig.tryNormalizeUrl('http://user:pass@localhost:5244'), isNull);
+      expect(SiteConfig.tryNormalizeUrl('ftp://localhost:21'), isNull);
+      expect(SiteConfig.tryNormalizeUrl('http://localhost:0'), isNull);
+      expect(SiteConfig.tryNormalizeUrl('http://localhost:70000'), isNull);
+      expect(SiteConfig.tryNormalizeUrl('   '), isNull);
     });
   });
 }

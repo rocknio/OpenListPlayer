@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512" role="img" aria-label="云序 紧凑图标">
+  <title>云序紧凑图标（32px 及以下专用）</title>
+  <desc>精简为单道加粗暖陶声环与圆润播放芯，确保 16px ~ 32px 小尺寸下依然清晰锐利。</desc>
+  <defs>
+    <linearGradient id="paperBg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#FCFBF8"/>
+      <stop offset="1" stop-color="#F2ECE2"/>
+    </linearGradient>
+    <clipPath id="squircle">
+      <rect x="0" y="0" width="512" height="512" rx="114"/>
+    </clipPath>
+  </defs>
+  <g clip-path="url(#squircle)">
+    <rect x="0" y="0" width="512" height="512" fill="url(#paperBg)"/>
+    <rect x="2" y="2" width="508" height="508" rx="112" fill="none" stroke="#E5DDD0" stroke-width="4"/>
+    <path d="M 358 164 A 138 138 0 1 0 358 348" fill="none" stroke="#B85C38" stroke-width="34" stroke-linecap="round" opacity="0.55"/>
+    <path d="M 232 204 C 232 195 242 189 250 194 L 320 244 C 328 249 328 263 320 268 L 250 318 C 242 323 232 317 232 308 Z" fill="#B85C38"/>
+  </g>
+</svg>

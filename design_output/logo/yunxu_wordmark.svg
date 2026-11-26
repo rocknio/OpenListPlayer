@@ -1,18 +1,29 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 280" width="900" height="280" role="img" aria-label="云序 字标">
   <title>云序字标</title>
-  <desc>图标与中文名云序、英文名 Yunxu 组合的横版字标。</desc>
+  <desc>声环留声图标与中文名云序、英文名 Yunxu 组合的横版字标。</desc>
+  <defs>
+    <linearGradient id="paperBg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#FCFBF8"/>
+      <stop offset="1" stop-color="#F2ECE2"/>
+    </linearGradient>
+    <linearGradient id="accentGrad" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#CE6D43"/>
+      <stop offset="1" stop-color="#A64D2A"/>
+    </linearGradient>
+    <clipPath id="squircle">
+      <rect x="0" y="0" width="512" height="512" rx="114"/>
+    </clipPath>
+  </defs>
   <g transform="translate(24 34) scale(0.41)">
-    <rect x="0" y="0" width="512" height="512" rx="112" fill="#B85C38"/>
-    <circle cx="196" cy="248" r="58" fill="#F5F2EC"/>
-    <circle cx="256" cy="218" r="82" fill="#F5F2EC"/>
-    <circle cx="330" cy="252" r="54" fill="#F5F2EC"/>
-    <rect x="196" y="248" width="134" height="58" rx="29" fill="#F5F2EC"/>
-    <path d="M236 188 L236 268 L306 228 Z" fill="#B85C38"/>
-    <rect x="176" y="348" width="26" height="10" rx="5" fill="#F5F2EC"/>
-    <rect x="210" y="348" width="40" height="10" rx="5" fill="#F5F2EC"/>
-    <rect x="256" y="348" width="54" height="10" rx="5" fill="#F5F2EC"/>
+    <g clip-path="url(#squircle)">
+      <rect x="0" y="0" width="512" height="512" fill="url(#paperBg)"/>
+      <rect x="2" y="2" width="508" height="508" rx="112" fill="none" stroke="#E5DDD0" stroke-width="4"/>
+      <path d="M 366 160 A 146 146 0 1 0 366 352" fill="none" stroke="#B85C38" stroke-width="22" stroke-linecap="round" opacity="0.30"/>
+      <path d="M 322 188 A 94 94 0 1 0 322 324" fill="none" stroke="#B85C38" stroke-width="22" stroke-linecap="round" opacity="0.66"/>
+      <path d="M 239 218 C 239 210 248 205 255 209 L 311 247 C 318 251 318 261 311 265 L 255 303 C 248 307 239 302 239 294 Z" fill="url(#accentGrad)"/>
+    </g>
   </g>
-  <text x="256" y="130" font-family="'Microsoft YaHei','PingFang SC','Noto Sans CJK SC',sans-serif" font-size="82" font-weight="700" letter-spacing="8" fill="#21201D">云序</text>
-  <text x="262" y="182" font-family="Arial,Helvetica,sans-serif" font-size="28" font-weight="500" letter-spacing="12" fill="#B85C38">Y U N X U</text>
-  <text x="262" y="228" font-family="'Microsoft YaHei','PingFang SC','Noto Sans CJK SC',sans-serif" font-size="20" letter-spacing="3" fill="#938A7E">云端有序，续播无忧</text>
+  <text x="256" y="130" font-family="'PingFang SC','Microsoft YaHei','Noto Sans CJK SC',sans-serif" font-size="82" font-weight="700" letter-spacing="8" fill="#21201D">云序</text>
+  <text x="262" y="182" font-family="Inter,Arial,Helvetica,sans-serif" font-size="28" font-weight="500" letter-spacing="12" fill="#B85C38">Y U N X U</text>
+  <text x="262" y="228" font-family="'PingFang SC','Microsoft YaHei','Noto Sans CJK SC',sans-serif" font-size="20" letter-spacing="3" fill="#8A8074">云端有序，续播无忧</text>
 </svg>

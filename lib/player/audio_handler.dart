@@ -64,7 +64,10 @@ class PlayerAudioHandler extends BaseAudioHandler {
     if (_disposed) return;
     final item = _c.current;
     if (item == null) {
-      _lastMediaItemId = null;
+      if (_lastMediaItemId != null || mediaItem.value != null) {
+        _lastMediaItemId = null;
+        mediaItem.add(null);
+      }
       _pushPlaybackState();
       return;
     }
@@ -111,6 +114,8 @@ class PlayerAudioHandler extends BaseAudioHandler {
         MediaAction.seek,
         MediaAction.seekForward,
         MediaAction.seekBackward,
+        MediaAction.fastForward,
+        MediaAction.rewind,
       },
       androidCompactActionIndices: const [0, 1, 2],
       processingState: _mapProcessingState(),
@@ -158,6 +163,22 @@ class PlayerAudioHandler extends BaseAudioHandler {
 
   @override
   Future<void> seek(Duration position) => _c.seek(position);
+
+  @override
+  Future<void> fastForward() => _c.seekRelative(10);
+
+  @override
+  Future<void> rewind() => _c.seekRelative(-10);
+
+  @override
+  Future<void> seekForward(bool begin) async {
+    if (begin) await _c.seekRelative(10);
+  }
+
+  @override
+  Future<void> seekBackward(bool begin) async {
+    if (begin) await _c.seekRelative(-10);
+  }
 
   @override
   Future<void> skipToNext() => _c.next();

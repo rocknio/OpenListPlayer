@@ -256,6 +256,55 @@ void main() {
       final all = await db.select(db.playHistories).get();
       expect(all.length, lessThanOrEqualTo(20));
     });
+
+    test('R3-L1: loadSession 过滤混入的脏条目与负时长，保留有效会话项不崩溃', () async {
+      await db.customStatement(
+        'INSERT OR REPLACE INTO session_state (id, queue_json, current_index, position_ms, duration_ms) '
+        'VALUES (1, ?, 5, -100, -50)',
+        [
+          '["broken", {"path": "", "name": "empty"}, {"path": "/ok.mp3", "name": "ok.mp3", "isVideo": false}]',
+        ],
+      );
+      final loaded = await db.loadSession();
+      expect(loaded, isNotNull);
+      expect(loaded!.queue.single.path, '/ok.mp3');
+      expect(loaded.index, 0);
+      expect(loaded.position, Duration.zero);
+      expect(loaded.duration, Duration.zero);
+    });
+
+    test('directoryProgressesStream 与 directoryHistoryPathsStream 仅返回当前目录直属子项', () async {
+      await db.upsertProgress(
+        '/books/ep1.mp3',
+        const Duration(seconds: 30),
+        const Duration(seconds: 120),
+      );
+      await db.upsertProgress(
+        '/books/sub/nested.mp3',
+        const Duration(seconds: 10),
+        const Duration(seconds: 60),
+      );
+      await db.upsertProgress(
+        '/other/ep1.mp3',
+        const Duration(seconds: 20),
+        const Duration(seconds: 60),
+      );
+      await db.touchHistory(const QueueItem(path: '/books/ep2.mp3', name: 'ep2.mp3', isVideo: false));
+      await db.touchHistory(
+        const QueueItem(path: '/books/sub/nested.mp3', name: 'nested.mp3', isVideo: false),
+      );
+      await db.touchHistory(const QueueItem(path: '/root_song.mp3', name: 'root_song.mp3', isVideo: false));
+
+      final dirProgress = await db.directoryProgressesStream('/books').first;
+      expect(dirProgress.keys, ['/books/ep1.mp3']);
+      expect(dirProgress['/books/ep1.mp3']?.positionMs, 30000);
+
+      final dirHistory = await db.directoryHistoryPathsStream('/books').first;
+      expect(dirHistory, {'/books/ep2.mp3'});
+
+      final rootHistory = await db.directoryHistoryPathsStream('/').first;
+      expect(rootHistory, {'/root_song.mp3'});
+    });
   });
 }
 

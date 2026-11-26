@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512" role="img" aria-label="云序 单色通知栏图标">
+  <title>云序单色图标（通知栏 / 深色面反白）</title>
+  <desc>透明底板纯白单色声环与圆润播放芯，适用于 Android 通知栏小图标与深色背景反白场景。</desc>
+  <path d="M 358 164 A 138 138 0 1 0 358 348" fill="none" stroke="#FFFFFF" stroke-width="34" stroke-linecap="round" opacity="0.72"/>
+  <path d="M 232 204 C 232 195 242 189 250 194 L 320 244 C 328 249 328 263 320 268 L 250 318 C 242 323 232 317 232 308 Z" fill="#FFFFFF"/>
+</svg>

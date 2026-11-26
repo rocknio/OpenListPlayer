@@ -202,5 +202,104 @@ void main() {
       );
       client.close();
     });
+
+    test('R1-M1: 网关返回非 JSON 对象时抛出 OpenListApiException 而非 TypeError', () async {
+      final dio = Dio()
+        ..httpClientAdapter = _MockAdapter((_, _) {
+          return ResponseBody.fromString(
+            '<html>502 Bad Gateway</html>',
+            200,
+            headers: {
+              Headers.contentTypeHeader: ['text/html'],
+            },
+          );
+        });
+      final client = OpenListClient(
+        site: const SiteConfig(baseUrl: 'http://localhost:5244'),
+        dio: dio,
+      );
+      await expectLater(
+        client.listDir('/'),
+        throwsA(isA<OpenListApiException>()),
+      );
+      client.close();
+    });
+
+    test('R1-M1: 站内相对路径 raw_url / thumb 自动补全站点 baseUrl，且 /ping 容忍首尾空白', () async {
+      final dio = Dio()
+        ..httpClientAdapter = _MockAdapter((options, _) {
+          if (options.path == '/ping') {
+            return ResponseBody.fromString('pong\n', 200);
+          }
+          if (options.path == '/api/fs/list') {
+            return _jsonResp({
+              'code': 200,
+              'data': {
+                'content': [
+                  {'name': 'cover_song.mp3', 'is_dir': false, 'size': 512, 'thumb': '/p/thumb/1.jpg'},
+                  'invalid_element_ignored',
+                ],
+              },
+            });
+          }
+          return _jsonResp({
+            'code': 200,
+            'data': {
+              'name': 'cover_song.mp3',
+              'raw_url': '/d/music/cover_song.mp3?sign=xyz',
+              'size': 512,
+            },
+          });
+        });
+      final client = OpenListClient(
+        site: const SiteConfig(baseUrl: 'http://192.168.2.29:5244/'),
+        dio: dio,
+      );
+
+      final count = await client.testConnection();
+      expect(count, 1);
+      final entries = await client.listDir('/');
+      expect(entries.single.thumb, 'http://192.168.2.29:5244/p/thumb/1.jpg');
+      final link = await client.getFileLink('/music/cover_song.mp3');
+      expect(link.url, 'http://192.168.2.29:5244/d/music/cover_song.mp3?sign=xyz');
+      client.close();
+    });
+
+    test('R2-M2: 协议相对 URL (//cdn...) 继承站点协议，子路径反代部署避免重复拼接前缀', () async {
+      final dio = Dio()
+        ..httpClientAdapter = _MockAdapter((options, _) {
+          if (options.path == '/api/fs/list') {
+            return _jsonResp({
+              'code': 200,
+              'data': {
+                'content': [
+                  {'name': 'ep1.mkv', 'is_dir': false, 'size': 1024, 'thumb': '//cdn.example.com/t1.jpg'},
+                  {'name': 'ep2.mkv', 'is_dir': false, 'size': 1024, 'thumb': 'HTTPS://img.example.com/t2.jpg'},
+                ],
+              },
+            });
+          }
+          return _jsonResp({
+            'code': 200,
+            'data': {
+              'name': 'ep1.mkv',
+              'raw_url': '/alist/d/video/ep1.mkv?sign=123',
+              'size': 1024,
+            },
+          });
+        });
+      final client = OpenListClient(
+        site: const SiteConfig(baseUrl: 'https://nas.example.com/alist'),
+        dio: dio,
+      );
+
+      final entries = await client.listDir('/');
+      expect(entries[0].thumb, 'https://cdn.example.com/t1.jpg');
+      expect(entries[1].thumb, 'HTTPS://img.example.com/t2.jpg');
+
+      final link = await client.getFileLink('/video/ep1.mkv');
+      expect(link.url, 'https://nas.example.com/alist/d/video/ep1.mkv?sign=123');
+      client.close();
+    });
   });
 }

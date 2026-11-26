@@ -282,6 +282,40 @@ class AppDatabase extends _$AppDatabase {
   Stream<PlayProgress?> progressStream(String path) =>
       (select(playProgresses)..where((t) => t.path.equals(path))).watchSingleOrNull();
 
+  /// 按目录路径监听当前目录下所有直接子文件的全局播放进度（返回 path -> PlayProgress 映射）。
+  Stream<Map<String, PlayProgress>> directoryProgressesStream(String dirPath) {
+    final normalized = dirPath.endsWith('/') ? dirPath : '$dirPath/';
+    return (select(playProgresses)..where((t) => t.path.like('$normalized%'))).watch().map((rows) {
+      final map = <String, PlayProgress>{};
+      for (final row in rows) {
+        if (!row.path.startsWith(normalized)) continue;
+        final tail = row.path.substring(normalized.length);
+        // 仅保留直接子项，排除更深层子目录条目
+        if (tail.isNotEmpty && !tail.contains('/')) {
+          map[row.path] = row;
+        }
+      }
+      return map;
+    });
+  }
+
+  /// 按目录路径监听当前目录下已有播放历史记录的子文件路径集合，配合 [directoryProgressesStream]
+  /// 识别“已听完/看完（全局进度行已被删除但历史表有记录）”的条目。
+  Stream<Set<String>> directoryHistoryPathsStream(String dirPath) {
+    final normalized = dirPath.endsWith('/') ? dirPath : '$dirPath/';
+    return (select(playHistories)..where((t) => t.path.like('$normalized%'))).watch().map((rows) {
+      final set = <String>{};
+      for (final row in rows) {
+        if (!row.path.startsWith(normalized)) continue;
+        final tail = row.path.substring(normalized.length);
+        if (tail.isNotEmpty && !tail.contains('/')) {
+          set.add(row.path);
+        }
+      }
+      return set;
+    });
+  }
+
   // ---------- 播单独立进度 ----------
 
   /// 整个播单的进度流（详情页一次性拿到，按 path 建索引）
@@ -341,14 +375,14 @@ class AppDatabase extends _$AppDatabase {
             playedAt: DateTime.now(),
           ),
         );
-        // 保留最近 20 条，裁剪更早的历史记录避免无限增长
-        final keep = await (select(playHistories)
+        // 保留最近 20 条：仅在存在第 21 条及以后的旧记录时才触发删除，避免未超限时多余写通知
+        final stale = await (select(playHistories)
               ..orderBy([(t) => OrderingTerm.desc(t.playedAt)])
-              ..limit(20))
+              ..limit(1000, offset: 20))
             .get();
-        if (keep.length >= 20) {
-          final keepPaths = keep.map((e) => e.path).toList();
-          await (delete(playHistories)..where((t) => t.path.isNotIn(keepPaths))).go();
+        if (stale.isNotEmpty) {
+          final stalePaths = stale.map((e) => e.path).toList();
+          await (delete(playHistories)..where((t) => t.path.isIn(stalePaths))).go();
         }
       });
 
@@ -404,15 +438,19 @@ class AppDatabase extends _$AppDatabase {
     final row = await (select(sessionState)..where((t) => t.id.equals(1))).getSingleOrNull();
     if (row == null) return null;
     try {
-      final list = (jsonDecode(row.queueJson) as List<dynamic>)
-          .map((e) => queueItemFromJson(e as Map<String, dynamic>))
+      final raw = jsonDecode(row.queueJson);
+      if (raw is! List) return null;
+      final list = raw
+          .whereType<Map<dynamic, dynamic>>()
+          .map((e) => queueItemFromJson(Map<String, dynamic>.from(e)))
+          .where((q) => q.path.isNotEmpty)
           .toList();
       if (list.isEmpty) return null;
       return (
         queue: list,
         index: row.currentIndex.clamp(0, list.length - 1),
-        position: Duration(milliseconds: row.positionMs),
-        duration: Duration(milliseconds: row.durationMs),
+        position: Duration(milliseconds: row.positionMs < 0 ? 0 : row.positionMs),
+        duration: Duration(milliseconds: row.durationMs < 0 ? 0 : row.durationMs),
         sourcePlaylistId: row.sourcePlaylistId,
       );
     } catch (_) {
@@ -429,10 +467,10 @@ Map<String, dynamic> queueItemToJson(QueueItem q) =>
 
 /// QueueItem 的 JSON 解码
 QueueItem queueItemFromJson(Map<String, dynamic> j) => QueueItem(
-      path: j['path'] as String,
-      name: j['name'] as String,
+      path: j['path']?.toString() ?? '',
+      name: j['name']?.toString() ?? '',
       isVideo: (j['isVideo'] as bool?) ?? false,
       size: (j['size'] as num?)?.toInt() ?? 0,
       // 旧会话没有 thumb 字段，缺省空字符串
-      thumb: j['thumb'] as String? ?? '',
+      thumb: j['thumb']?.toString() ?? '',
     );

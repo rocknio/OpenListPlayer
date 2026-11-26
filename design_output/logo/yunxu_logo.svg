@@ -1,18 +1,24 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512" role="img" aria-label="云序 App 图标">
-  <title>云序 App 图标</title>
-  <desc>陶土色圆角方形底，中央米白云朵托起播放三角，云下三条由短到长的横条象征自然排序与连续播放。</desc>
+  <title>云序 App 图标（声环留声）</title>
+  <desc>米白纸感微渐变圆角底，两道向右开口的同心暖陶唱纹环抱一枚圆润微播放芯，呼应留声机唱盘与声波向外扩散的流动韵律。</desc>
   <defs>
-    <clipPath id="squircle"><rect x="0" y="0" width="512" height="512" rx="112"/></clipPath>
+    <linearGradient id="paperBg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#FCFBF8"/>
+      <stop offset="1" stop-color="#F2ECE2"/>
+    </linearGradient>
+    <linearGradient id="accentGrad" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#CE6D43"/>
+      <stop offset="1" stop-color="#A64D2A"/>
+    </linearGradient>
+    <clipPath id="squircle">
+      <rect x="0" y="0" width="512" height="512" rx="114"/>
+    </clipPath>
   </defs>
   <g clip-path="url(#squircle)">
-    <rect x="0" y="0" width="512" height="512" fill="#B85C38"/>
-    <circle cx="196" cy="248" r="58" fill="#F5F2EC"/>
-    <circle cx="256" cy="218" r="82" fill="#F5F2EC"/>
-    <circle cx="330" cy="252" r="54" fill="#F5F2EC"/>
-    <rect x="196" y="248" width="134" height="58" rx="29" fill="#F5F2EC"/>
-    <path d="M236 188 L236 268 L306 228 Z" fill="#B85C38"/>
-    <rect x="176" y="348" width="26" height="10" rx="5" fill="#F5F2EC"/>
-    <rect x="210" y="348" width="40" height="10" rx="5" fill="#F5F2EC"/>
-    <rect x="256" y="348" width="54" height="10" rx="5" fill="#F5F2EC"/>
+    <rect x="0" y="0" width="512" height="512" fill="url(#paperBg)"/>
+    <rect x="2" y="2" width="508" height="508" rx="112" fill="none" stroke="#E5DDD0" stroke-width="4"/>
+    <path d="M 366 160 A 146 146 0 1 0 366 352" fill="none" stroke="#B85C38" stroke-width="22" stroke-linecap="round" opacity="0.30"/>
+    <path d="M 322 188 A 94 94 0 1 0 322 324" fill="none" stroke="#B85C38" stroke-width="22" stroke-linecap="round" opacity="0.66"/>
+    <path d="M 239 218 C 239 210 248 205 255 209 L 311 247 C 318 251 318 261 311 265 L 255 303 C 248 307 239 302 239 294 Z" fill="url(#accentGrad)"/>
   </g>
 </svg>
