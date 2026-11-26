@@ -9,6 +9,7 @@ import 'package:flutter/foundation.dart';
 import 'package:media_kit/media_kit.dart';
 import 'package:media_kit_video/media_kit_video.dart';
 
+import '../core/lrc_parser.dart';
 import '../core/media_types.dart';
 import '../core/models.dart';
 import '../core/natural_sort.dart' show compareNatural;
@@ -20,6 +21,9 @@ import '../data/settings_service.dart';
 import 'player_backend.dart';
 
 enum PlaybackStatus { idle, opening, buffering, playing, paused, error }
+
+/// 睡眠定时模式
+enum SleepTimerMode { off, countdown, endOfTrack }
 
 /// 播放器对外暴露的轨道描述（UI 用）
 class TrackDesc {
@@ -113,6 +117,98 @@ class PlaybackController extends ChangeNotifier {
 
   /// 当前同目录可用外挂字幕（含未加载的），供手动选择
   List<String> availableExternalSubs = [];
+
+  /// 当前音频匹配的同目录 LRC 歌词行（无匹配或加载失败时为空）
+  List<LrcLine> lyrics = const [];
+  bool get hasLyrics => lyrics.isNotEmpty;
+
+  // ---------- 睡眠定时 ----------
+  SleepTimerMode _sleepTimerMode = SleepTimerMode.off;
+  DateTime? _sleepDeadline;
+  Timer? _sleepTimer;
+  Timer? _sleepTickTimer;
+
+  SleepTimerMode get sleepTimerMode => _sleepTimerMode;
+  bool get hasSleepTimer => _sleepTimerMode != SleepTimerMode.off;
+
+  /// 倒计时剩余时长（非倒计时模式返回 null）
+  Duration? get sleepRemaining {
+    if (_sleepTimerMode != SleepTimerMode.countdown || _sleepDeadline == null) return null;
+    final diff = _sleepDeadline!.difference(DateTime.now());
+    return diff.isNegative ? Duration.zero : diff;
+  }
+
+  /// 工具栏紧凑标签（如 `24m` / `本集末` / `定时`）
+  String get sleepTimerShortLabel {
+    switch (_sleepTimerMode) {
+      case SleepTimerMode.off:
+        return '定时';
+      case SleepTimerMode.endOfTrack:
+        return '本集末';
+      case SleepTimerMode.countdown:
+        final rem = sleepRemaining ?? Duration.zero;
+        final mins = (rem.inSeconds / 60).ceil();
+        return '${mins < 1 ? 1 : mins}m';
+    }
+  }
+
+  /// 设定倒计时睡眠定时（到点自动暂停播放并清零）
+  void setSleepCountdown(Duration duration) {
+    _cancelSleepTimers();
+    if (duration <= Duration.zero) {
+      _sleepTimerMode = SleepTimerMode.off;
+      _notify();
+      return;
+    }
+    _sleepTimerMode = SleepTimerMode.countdown;
+    _sleepDeadline = DateTime.now().add(duration);
+    _sleepTimer = Timer(duration, () {
+      unawaited(_triggerSleepPause());
+    });
+    // 每 15 秒轻刷一次 UI 显示的剩余分钟，避免每秒重建
+    _sleepTickTimer = Timer.periodic(const Duration(seconds: 15), (_) {
+      if (_disposed || _sleepTimerMode != SleepTimerMode.countdown) return;
+      _notify();
+    });
+    _notify();
+  }
+
+  /// 设定“播完本集自动暂停”
+  void setSleepEndOfTrack() {
+    _cancelSleepTimers();
+    _sleepTimerMode = SleepTimerMode.endOfTrack;
+    _notify();
+  }
+
+  /// 关闭睡眠定时
+  void cancelSleepTimer() {
+    if (_sleepTimerMode == SleepTimerMode.off) return;
+    _cancelSleepTimers();
+    _sleepTimerMode = SleepTimerMode.off;
+    _notify();
+  }
+
+  void _cancelSleepTimers() {
+    _sleepTimer?.cancel();
+    _sleepTimer = null;
+    _sleepTickTimer?.cancel();
+    _sleepTickTimer = null;
+    _sleepDeadline = null;
+  }
+
+  Future<void> _triggerSleepPause() async {
+    _cancelSleepTimers();
+    _sleepTimerMode = SleepTimerMode.off;
+    if (_disposed) return;
+    try {
+      await _backend.pause();
+    } catch (_) {}
+    if (!_disposed && (status == PlaybackStatus.playing || status == PlaybackStatus.buffering)) {
+      status = PlaybackStatus.paused;
+    }
+    unawaited(_recordProgressNow());
+    _notify();
+  }
 
   QueueItem? get current => (index >= 0 && index < queue.length) ? queue[index] : null;
   bool get hasQueue => queue.isNotEmpty;
@@ -224,6 +320,7 @@ class PlaybackController extends ChangeNotifier {
     _disposed = true;
     _retryTimer?.cancel();
     _progressTimer?.cancel();
+    _cancelSleepTimers();
     _playingSub?.cancel();
     _completedSub?.cancel();
     _errorSub?.cancel();
@@ -451,6 +548,7 @@ class PlaybackController extends ChangeNotifier {
     audioTracks = [];
     subtitleTracks = [];
     availableExternalSubs = [];
+    lyrics = const [];
     currentAudio = null;
     currentSubtitle = null;
     errorText = null;
@@ -537,7 +635,11 @@ class PlaybackController extends ChangeNotifier {
       if (activeSerial != _openSerial || _disposed) return;
       await _backend.setRate(_speed);
       await _applySubDelay();
-      unawaited(_attachExternalSubs(activeSerial, item)); // 不阻塞开播
+      if (item.isVideo) {
+        unawaited(_attachExternalSubs(activeSerial, item)); // 不阻塞开播
+      } else {
+        unawaited(_loadLyricsForAudio(activeSerial, item)); // 不阻塞开播
+      }
       _startProgressTimer();
       await _db.touchHistory(item);
       await _saveSessionNow();
@@ -589,6 +691,27 @@ class PlaybackController extends ChangeNotifier {
       _maybeApplyTrackPrefs();
     } catch (_) {
       // 外挂字幕失败不影响播放
+    }
+  }
+
+  /// 音频曲目自动检索并解析同目录 `.lrc` 歌词（失败静默降级，不阻塞播放）
+  Future<void> _loadLyricsForAudio(int serial, QueueItem item) async {
+    if (item.isVideo) return;
+    try {
+      final siblings = await _api().listDir(item.parent);
+      if (serial != _openSerial || _disposed) return;
+      final names = siblings.where((e) => !e.isDirectory).map((e) => e.name);
+      final lrcName = matchLrcFile(item.name, names);
+      if (lrcName == null) return;
+      final raw = await _api().fetchTextFile(joinPath(item.parent, lrcName));
+      if (serial != _openSerial || _disposed) return;
+      final parsed = parseLrc(raw);
+      if (parsed.isNotEmpty) {
+        lyrics = parsed;
+        _notify();
+      }
+    } catch (_) {
+      // 歌词加载失败静默降级，保持唱片舞台
     }
   }
 
@@ -855,6 +978,20 @@ class PlaybackController extends ChangeNotifier {
     }
     await _db.touchHistory(item);
     if (serial != _openSerial || _disposed) return;
+    // 睡眠定时为“播完本集停”：本集结束后自动停在开头并关闭定时
+    if (_sleepTimerMode == SleepTimerMode.endOfTrack) {
+      _cancelSleepTimers();
+      _sleepTimerMode = SleepTimerMode.off;
+      _lastPosition = Duration.zero;
+      await _backend.seek(Duration.zero);
+      await _backend.pause();
+      if (!_disposed && serial == _openSerial) {
+        status = PlaybackStatus.paused;
+        unawaited(_saveSessionNow());
+        _notify();
+      }
+      return;
+    }
     if (mode == PlayMode.repeatOne) {
       _lastPosition = Duration.zero;
       await _backend.seek(Duration.zero);
@@ -949,8 +1086,11 @@ class PlaybackController extends ChangeNotifier {
     _loadedSerial = -1;
     _retryTimer?.cancel();
     _progressTimer?.cancel();
+    _cancelSleepTimers();
+    _sleepTimerMode = SleepTimerMode.off;
     _handlingError = false;
     _tempSpeed = null;
+    lyrics = const [];
     await _recordProgressNow();
     await _backend.stop();
     status = PlaybackStatus.idle;

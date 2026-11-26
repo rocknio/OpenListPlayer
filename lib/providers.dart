@@ -64,6 +64,11 @@ class AppSettingsNotifier extends Notifier<AppSettings> {
     state = _svc.load();
     await ref.read(playbackProvider).setSpeed(state.globalSpeed);
   }
+
+  Future<void> setThemePreference(AppThemePreference pref) async {
+    await _svc.saveThemePreference(pref);
+    state = _svc.load();
+  }
 }
 
 final settingsProvider = NotifierProvider<AppSettingsNotifier, AppSettings>(AppSettingsNotifier.new);

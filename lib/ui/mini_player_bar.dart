@@ -1,28 +1,58 @@
-/// 底部常驻 mini 播放条（按 Arudio 设计稿：白色圆角卡片 + 陶土进度 + 圆形播放键）。
+/// 底部常驻 mini 播放条（一体化暖陶胶囊 + 底部贯穿进度细线 + 左右横滑切歌 + 自底向上模态展开）。
 library;
 
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../core/models.dart';
 import '../player/playback_controller.dart';
 import '../providers.dart';
 import 'app_theme.dart';
-import 'widgets.dart';
+import 'icons.dart';
 import 'player/audio_page.dart';
 import 'player/audio_theme.dart';
 import 'player/player_screen.dart';
+import 'widgets.dart';
 
-class MiniPlayerBar extends ConsumerWidget {
+class MiniPlayerBar extends ConsumerStatefulWidget {
   const MiniPlayerBar({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<MiniPlayerBar> createState() => _MiniPlayerBarState();
+}
+
+class _MiniPlayerBarState extends ConsumerState<MiniPlayerBar> {
+  double _swipeDx = 0;
+
+  void _openPlayer(BuildContext context, PlaybackController playback, QueueItem item) {
+    if (playback.status == PlaybackStatus.idle) {
+      unawaited(playback.resumeSession());
+    }
+    Navigator.of(context).push(buildPlayerSheetRoute<void>(
+      item.isVideo ? const PlayerScreen() : const AudioPage(),
+    ));
+  }
+
+  void _handleSwipeEnd(PlaybackController playback, DragEndDetails details) {
+    final velocity = details.primaryVelocity ?? 0;
+    final dx = _swipeDx;
+    if (_swipeDx != 0) setState(() => _swipeDx = 0);
+    if (playback.queue.length <= 1) return;
+    if (dx < -36 || velocity < -300) {
+      HapticFeedback.selectionClick();
+      unawaited(playback.next());
+    } else if (dx > 36 || velocity > 300) {
+      HapticFeedback.selectionClick();
+      unawaited(playback.previous());
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
     final playback = ref.watch(playbackProvider);
-    // PlaybackController 是 ChangeNotifier：Provider 只在首次创建时求值，
-    // notifyListeners 不会重建。必须用 ListenableBuilder 订阅。
     return ListenableBuilder(
       listenable: playback,
       builder: (context, _) {
@@ -30,58 +60,110 @@ class MiniPlayerBar extends ConsumerWidget {
         if (item == null) return const SizedBox.shrink();
 
         final isDark = Theme.of(context).brightness == Brightness.dark;
-        final card = isDark ? AppPalette.darkSurface : AudioTone.surface;
-        final titleColor = isDark ? AppPalette.darkInk : AudioTone.ink;
+        final card = AppPalette.surfaceOf(context);
+        final titleColor = AppPalette.inkOf(context);
+        final mutedColor = AppPalette.mutedOf(context);
+        final borderColor = AppPalette.sandDeepOf(context);
+        final accent = AppPalette.accentOf(context);
+        final source = item.parent == '/' ? '网盘' : item.parent.split('/').last;
 
         return Padding(
-          padding: const EdgeInsets.fromLTRB(16, 0, 16, 6),
-          child: Material(
-            color: card,
-            borderRadius: BorderRadius.circular(20),
-            elevation: 8,
-            shadowColor: AudioTone.barShadow,
-            child: Semantics(
-              button: true,
-              label: '打开正在播放：${item.name}',
-              child: InkWell(
-                borderRadius: BorderRadius.circular(20),
-                onTap: () {
-                  if (playback.status == PlaybackStatus.idle) {
-                    unawaited(playback.resumeSession());
-                  }
-                  Navigator.of(context).push(MaterialPageRoute<void>(
-                    builder: (_) => item.isVideo ? const PlayerScreen() : const AudioPage(),
-                  ));
-                },
-                child: Padding(
-                  padding: const EdgeInsets.fromLTRB(10, 10, 10, 10),
-                  child: Row(
-                    children: [
-                      _thumb(item, 44, isDark: isDark),
-                      const SizedBox(width: 10),
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Text(
-                              item.name,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: TextStyle(
-                                fontSize: 13,
-                                fontWeight: FontWeight.w500,
-                                color: titleColor,
+          padding: const EdgeInsets.fromLTRB(14, 0, 14, 6),
+          child: GestureDetector(
+            onHorizontalDragUpdate: (d) {
+              if (playback.queue.length <= 1) return;
+              setState(() => _swipeDx = (_swipeDx + d.delta.dx).clamp(-56.0, 56.0));
+            },
+            onHorizontalDragEnd: (d) => _handleSwipeEnd(playback, d),
+            onHorizontalDragCancel: () {
+              if (_swipeDx != 0) setState(() => _swipeDx = 0);
+            },
+            child: Material(
+              color: card,
+              borderRadius: BorderRadius.circular(22),
+              elevation: isDark ? 4 : 8,
+              shadowColor: AudioTone.barShadow,
+              clipBehavior: Clip.antiAlias,
+              child: Container(
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(22),
+                  border: Border.all(color: borderColor, width: 0.9),
+                ),
+                child: Semantics(
+                  button: true,
+                  label: '打开正在播放：${item.name}',
+                  child: InkWell(
+                    borderRadius: BorderRadius.circular(22),
+                    onTap: () => _openPlayer(context, playback, item),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Padding(
+                          padding: const EdgeInsets.fromLTRB(10, 9, 8, 8),
+                          child: Row(
+                            children: [
+                              Hero(
+                                tag: 'olp-player-cover',
+                                child: _thumb(context, playback, item, 42, isDark: isDark),
                               ),
-                            ),
-                            const SizedBox(height: 6),
-                            _progressLine(playback, isDark: isDark),
-                          ],
+                              const SizedBox(width: 10),
+                              Expanded(
+                                child: AnimatedContainer(
+                                  duration: _swipeDx == 0
+                                      ? const Duration(milliseconds: 200)
+                                      : Duration.zero,
+                                  curve: Curves.easeOutCubic,
+                                  transform: Matrix4.translationValues(_swipeDx * 0.35, 0, 0),
+                                  child: Column(
+                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      AnimatedSwitcher(
+                                        duration: const Duration(milliseconds: 200),
+                                        layoutBuilder: (cur, prev) => Stack(
+                                          alignment: Alignment.centerLeft,
+                                          children: [...prev, ?cur],
+                                        ),
+                                        child: Text(
+                                          item.name,
+                                          key: ValueKey(item.path),
+                                          maxLines: 1,
+                                          overflow: TextOverflow.ellipsis,
+                                          style: TextStyle(
+                                            fontSize: 13.5,
+                                            fontWeight: FontWeight.w600,
+                                            color: titleColor,
+                                          ),
+                                        ),
+                                      ),
+                                      const SizedBox(height: 2),
+                                      _subtitleLine(playback, source, mutedColor, accent),
+                                    ],
+                                  ),
+                                ),
+                              ),
+                              const SizedBox(width: 6),
+                              _PlayPauseButton(playback: playback, isDark: isDark),
+                              if (playback.queue.length > 1) ...[
+                                const SizedBox(width: 2),
+                                IconButton(
+                                  tooltip: '下一曲',
+                                  visualDensity: VisualDensity.compact,
+                                  padding: EdgeInsets.zero,
+                                  constraints: const BoxConstraints(minWidth: 32, minHeight: 36),
+                                  icon: Icon(AppIcons.next, size: 22, color: mutedColor),
+                                  onPressed: () {
+                                    HapticFeedback.selectionClick();
+                                    unawaited(playback.next());
+                                  },
+                                ),
+                              ],
+                            ],
+                          ),
                         ),
-                      ),
-                      const SizedBox(width: 8),
-                      _PlayPauseButton(playback: playback, isDark: isDark),
-                    ],
+                        _bottomProgressLine(playback, isDark: isDark),
+                      ],
+                    ),
                   ),
                 ),
               ),
@@ -92,26 +174,81 @@ class MiniPlayerBar extends ConsumerWidget {
     );
   }
 
-  Widget _thumb(QueueItem item, double size, {required bool isDark}) {
-    final radius = size * 0.22;
-    // 音频无封面 / 加载失败回退到主题对应的矢量占位图；视频仍用影片图标。
+  Widget _subtitleLine(
+    PlaybackController playback,
+    String source,
+    Color mutedColor,
+    Color accent,
+  ) {
+    return StreamBuilder<Duration>(
+      stream: playback.positionStream,
+      builder: (context, snap) {
+        final pos = snap.data ?? playback.currentPosition;
+        final dur = playback.currentDuration;
+        String statusPrefix;
+        if (playback.status == PlaybackStatus.opening) {
+          statusPrefix = '打开中';
+        } else if (playback.status == PlaybackStatus.buffering) {
+          statusPrefix = '缓冲中';
+        } else if (playback.status == PlaybackStatus.error) {
+          statusPrefix = '播放失败';
+        } else if (dur.inMilliseconds > 0) {
+          final pct = ((pos.inMilliseconds / dur.inMilliseconds).clamp(0.0, 1.0) * 100).round();
+          final rem = dur > pos ? dur - pos : Duration.zero;
+          statusPrefix = '$pct% · 剩 ${formatDuration(rem)}';
+        } else {
+          statusPrefix = playback.status == PlaybackStatus.idle ? '待续播' : '准备中';
+        }
+        return Text(
+          '$statusPrefix · $source',
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: TextStyle(
+            fontSize: 11,
+            color: playback.status == PlaybackStatus.error ? accent : mutedColor,
+            fontFeatures: kTabularFigures,
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _thumb(
+    BuildContext context,
+    PlaybackController playback,
+    QueueItem item,
+    double size, {
+    required bool isDark,
+  }) {
+    final radius = size * 0.24;
+    final sand = AppPalette.sandOf(context);
+    final accent = AppPalette.accentOf(context);
+    final activePlaying = playback.status == PlaybackStatus.playing;
+
     Widget placeholder() {
       if (item.isVideo) {
         return Container(
           width: size,
           height: size,
           decoration: BoxDecoration(
-            color: AudioTone.sand,
+            color: sand,
             borderRadius: BorderRadius.circular(radius),
           ),
-          child: Icon(
-            Icons.movie_outlined,
-            size: size * 0.44,
-            color: AudioTone.accent,
-          ),
+          child: Icon(AppIcons.movie, size: size * 0.44, color: accent),
         );
       }
-      return AudioPlaceholderArt(isDark: isDark, size: size);
+      return Container(
+        width: size,
+        height: size,
+        decoration: BoxDecoration(
+          color: sand,
+          borderRadius: BorderRadius.circular(radius),
+        ),
+        alignment: Alignment.center,
+        child: activePlaying
+            ? PlayingWaveBars(playing: true, color: accent, size: 16)
+            : AudioPlaceholderArt(isDark: isDark, size: size),
+      );
     }
 
     if (item.thumb.isEmpty) {
@@ -132,7 +269,7 @@ class MiniPlayerBar extends ConsumerWidget {
     );
   }
 
-  Widget _progressLine(PlaybackController playback, {required bool isDark}) {
+  Widget _bottomProgressLine(PlaybackController playback, {required bool isDark}) {
     return StreamBuilder<Duration>(
       stream: playback.positionStream,
       builder: (context, snap) {
@@ -141,15 +278,12 @@ class MiniPlayerBar extends ConsumerWidget {
         final ratio = dur.inMilliseconds > 0
             ? (pos.inMilliseconds / dur.inMilliseconds).clamp(0.0, 1.0)
             : 0.0;
-        return ClipRRect(
-          borderRadius: BorderRadius.circular(999),
-          child: LinearProgressIndicator(
-            value: ratio,
-            minHeight: 3,
-            backgroundColor: isDark ? AppPalette.darkSandDeep : AudioTone.sandDeep,
-            valueColor: AlwaysStoppedAnimation(
-              isDark ? AppPalette.darkAccent : AudioTone.accent,
-            ),
+        return LinearProgressIndicator(
+          value: ratio,
+          minHeight: 2.5,
+          backgroundColor: isDark ? AppPalette.darkSandDeep : AudioTone.sandDeep,
+          valueColor: AlwaysStoppedAnimation(
+            isDark ? AppPalette.darkAccent : AudioTone.accent,
           ),
         );
       },
@@ -179,13 +313,16 @@ class _PlayPauseButton extends StatelessWidget {
             shape: const CircleBorder(),
             child: InkWell(
               customBorder: const CircleBorder(),
-              onTap: () => playback.togglePlay(),
+              onTap: () {
+                HapticFeedback.lightImpact();
+                playback.togglePlay();
+              },
               child: SizedBox(
-                width: 40,
-                height: 40,
+                width: 38,
+                height: 38,
                 child: Icon(
                   playing ? Icons.pause : Icons.play_arrow,
-                  size: 22,
+                  size: 21,
                   color: isDark ? AppPalette.darkBg : Colors.white,
                 ),
               ),

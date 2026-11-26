@@ -198,6 +198,22 @@ class OpenListClient {
       size: (body['size'] as num?)?.toInt() ?? 0,
     );
   }
+
+  /// 读取小型纯文本文件（如 .lrc 歌词），限制最大字节数避免误拉大文件。
+  Future<String> fetchTextFile(String path, {int maxBytes = 256 * 1024}) async {
+    final link = await getFileLink(path);
+    if (link.size > 0 && link.size > maxBytes) {
+      throw const OpenListApiException('文本文件过大，跳过加载');
+    }
+    final resp = await _dio.get<String>(
+      link.url,
+      options: Options(
+        headers: link.headers,
+        responseType: ResponseType.plain,
+      ),
+    );
+    return resp.data ?? '';
+  }
 }
 
 /// 文件直链信息

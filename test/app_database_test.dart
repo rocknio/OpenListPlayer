@@ -272,6 +272,39 @@ void main() {
       expect(loaded.position, Duration.zero);
       expect(loaded.duration, Duration.zero);
     });
+
+    test('directoryProgressesStream 与 directoryHistoryPathsStream 仅返回当前目录直属子项', () async {
+      await db.upsertProgress(
+        '/books/ep1.mp3',
+        const Duration(seconds: 30),
+        const Duration(seconds: 120),
+      );
+      await db.upsertProgress(
+        '/books/sub/nested.mp3',
+        const Duration(seconds: 10),
+        const Duration(seconds: 60),
+      );
+      await db.upsertProgress(
+        '/other/ep1.mp3',
+        const Duration(seconds: 20),
+        const Duration(seconds: 60),
+      );
+      await db.touchHistory(const QueueItem(path: '/books/ep2.mp3', name: 'ep2.mp3', isVideo: false));
+      await db.touchHistory(
+        const QueueItem(path: '/books/sub/nested.mp3', name: 'nested.mp3', isVideo: false),
+      );
+      await db.touchHistory(const QueueItem(path: '/root_song.mp3', name: 'root_song.mp3', isVideo: false));
+
+      final dirProgress = await db.directoryProgressesStream('/books').first;
+      expect(dirProgress.keys, ['/books/ep1.mp3']);
+      expect(dirProgress['/books/ep1.mp3']?.positionMs, 30000);
+
+      final dirHistory = await db.directoryHistoryPathsStream('/books').first;
+      expect(dirHistory, {'/books/ep2.mp3'});
+
+      final rootHistory = await db.directoryHistoryPathsStream('/').first;
+      expect(rootHistory, {'/root_song.mp3'});
+    });
   });
 }
 

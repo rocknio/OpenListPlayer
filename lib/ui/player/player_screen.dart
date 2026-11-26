@@ -15,9 +15,10 @@ import '../../core/models.dart';
 import '../../player/playback_controller.dart';
 import '../../providers.dart';
 import '../app_theme.dart';
+import '../browser/add_to_playlist_sheet.dart';
+import '../icons.dart';
 import '../widgets.dart';
 import 'audio_page.dart';
-import 'audio_theme.dart';
 import 'panels.dart';
 
 /// 左右各让出的边缘宽度：水平拖动 seek 不在此区域起手，保留给 iOS 系统返回手势
@@ -193,11 +194,13 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
       listenable: playback,
       builder: (context, _) {
         final item = playback.current;
+        final bg = AppPalette.bgOf(context);
+        final muted = AppPalette.mutedOf(context);
         if (item == null) {
           return Scaffold(
-            backgroundColor: AudioTone.bg,
+            backgroundColor: bg,
             appBar: AppBar(title: const Text('播放'), backgroundColor: Colors.transparent),
-            body: const Center(child: Text('没有正在播放的内容', style: TextStyle(color: AudioTone.muted))),
+            body: Center(child: Text('没有正在播放的内容', style: TextStyle(color: muted))),
           );
         }
         return OrientationBuilder(
@@ -212,7 +215,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
                 }
               },
               child: Scaffold(
-                backgroundColor: AudioTone.bg,
+                backgroundColor: isLandscape ? AppPalette.videoBackdrop : bg,
                 body: isLandscape ? _buildFullscreen(playback) : _buildPortrait(playback),
               ),
             );
@@ -222,47 +225,162 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
     );
   }
 
-  // ---------- 竖屏：内嵌 16:9 + 信息 + 队列 ----------
+  // ---------- 竖屏：内嵌 16:9 + 标题卡 + 外置快捷胶囊 + 选集卡片 ----------
 
   Widget _buildPortrait(PlaybackController playback) {
+    final cur = playback.current;
+    final ink = AppPalette.inkOf(context);
+    final muted = AppPalette.mutedOf(context);
+    final accent = AppPalette.accentOf(context);
+    final sand = AppPalette.sandOf(context);
+    final surface = AppPalette.surfaceOf(context);
+    final sandDeep = AppPalette.sandDeepOf(context);
+    final isPlaying = playback.status == PlaybackStatus.playing;
+    final hasSubs =
+        playback.subtitleTracks.isNotEmpty || playback.availableExternalSubs.isNotEmpty;
+    final hasAudio = playback.audioTracks.length > 1;
+    final fmt = cur == null ? '' : mediaFormatBadge(cur.name);
+
     return SafeArea(
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           _videoArea(playback, fullscreen: false),
           Expanded(
-            // 信息区与队列沿用全局米白陶土主题，使用 SliverList.builder 懒加载大队列条目。
             child: CustomScrollView(
               slivers: [
                 SliverPadding(
-                  padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+                  padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
                   sliver: SliverToBoxAdapter(
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [
-                        Text(
-                          playback.current?.name ?? '',
-                          style: const TextStyle(
-                            fontSize: 16,
-                            fontWeight: FontWeight.w600,
-                            color: AudioTone.ink,
-                          ),
+                        // 剧集标题卡
+                        InsetSectionCard(
+                          padding: const EdgeInsets.all(14),
+                          children: [
+                            Row(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Expanded(
+                                  child: Text(
+                                    cur?.name ?? '',
+                                    maxLines: 2,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: TextStyle(
+                                      fontSize: 16,
+                                      fontWeight: FontWeight.w600,
+                                      height: 1.3,
+                                      color: ink,
+                                    ),
+                                  ),
+                                ),
+                                if (fmt.isNotEmpty) ...[
+                                  const SizedBox(width: 8),
+                                  ToneBadge(label: fmt, accent: true),
+                                ],
+                              ],
+                            ),
+                            const SizedBox(height: 5),
+                            Text(
+                              '${cur?.isVideo == true ? '视频' : '音频'} · ${cur?.parent ?? ''}',
+                              style: TextStyle(color: muted, fontSize: 12),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                            const SizedBox(height: 12),
+                            // 外置快捷胶囊行：倍速 / 字幕 / 音轨 / 定时 / 加入播单
+                            SingleChildScrollView(
+                              scrollDirection: Axis.horizontal,
+                              child: Row(
+                                children: [
+                                  _portraitActionChip(
+                                    icon: AppIcons.speed,
+                                    label: formatSpeed(playback.effectiveSpeed),
+                                    active: (playback.speed - 1.0).abs() > 0.01,
+                                    sand: sand,
+                                    accent: accent,
+                                    ink: ink,
+                                    onTap: () => showSpeedPanel(context, playback),
+                                  ),
+                                  const SizedBox(width: 8),
+                                  _portraitActionChip(
+                                    icon: AppIcons.subtitles,
+                                    label: playback.currentSubtitle != null ? '字幕开' : '字幕',
+                                    active: playback.currentSubtitle != null,
+                                    enabled: hasSubs,
+                                    sand: sand,
+                                    accent: accent,
+                                    ink: ink,
+                                    onTap: () => showSubtitlePanel(context, playback),
+                                  ),
+                                  const SizedBox(width: 8),
+                                  _portraitActionChip(
+                                    icon: AppIcons.audioTrack,
+                                    label: '音轨',
+                                    active: false,
+                                    enabled: hasAudio,
+                                    sand: sand,
+                                    accent: accent,
+                                    ink: ink,
+                                    onTap: () => showAudioTrackPanel(context, playback),
+                                  ),
+                                  const SizedBox(width: 8),
+                                  _portraitActionChip(
+                                    icon: playback.hasSleepTimer
+                                        ? AppIcons.sleepActive
+                                        : AppIcons.sleep,
+                                    label: playback.sleepTimerShortLabel,
+                                    active: playback.hasSleepTimer,
+                                    sand: sand,
+                                    accent: accent,
+                                    ink: ink,
+                                    onTap: () => showSleepTimerPanel(context, playback),
+                                  ),
+                                  if (cur != null) ...[
+                                    const SizedBox(width: 8),
+                                    _portraitActionChip(
+                                      icon: Icons.playlist_add_rounded,
+                                      label: '加入播单',
+                                      active: false,
+                                      sand: sand,
+                                      accent: accent,
+                                      ink: ink,
+                                      onTap: () async {
+                                        final db = ref.read(dbProvider);
+                                        final added =
+                                            await showAddToPlaylistSheet(context, db, [cur]);
+                                        if (added != null && mounted) {
+                                          ScaffoldMessenger.of(context).showSnackBar(
+                                            SnackBar(
+                                              content: Text(
+                                                added > 0 ? '已添加到播单' : '该文件已在播单中',
+                                              ),
+                                            ),
+                                          );
+                                        }
+                                      },
+                                    ),
+                                  ],
+                                ],
+                              ),
+                            ),
+                          ],
                         ),
-                        const SizedBox(height: 4),
-                        Text(
-                          '${playback.current?.isVideo == true ? '视频' : '音频'} · ${playback.current?.parent ?? ''}',
-                          style: const TextStyle(color: AudioTone.muted, fontSize: 12),
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                        const SizedBox(height: 12),
-                        Text(
-                          '播放队列 (${playback.queue.length})',
-                          style: const TextStyle(
-                            color: AudioTone.muted,
-                            fontSize: 13,
-                            fontWeight: FontWeight.w600,
-                          ),
+                        const SizedBox(height: 14),
+                        Row(
+                          children: [
+                            Text(
+                              '选集队列',
+                              style: TextStyle(
+                                color: muted,
+                                fontSize: 13,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+                            ToneBadge(label: '共 ${playback.queue.length} 集'),
+                          ],
                         ),
                       ],
                     ),
@@ -275,32 +393,70 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
                     itemBuilder: (context, i) {
                       final qItem = playback.queue[i];
                       final isCur = i == playback.index;
-                      return ListTile(
-                        dense: true,
-                        contentPadding: EdgeInsets.zero,
-                        selected: isCur,
-                        selectedTileColor: AudioTone.sand,
-                        leading: Icon(
-                          qItem.isVideo ? Icons.movie_outlined : Icons.music_note_outlined,
-                          size: 20,
-                          color: isCur ? AudioTone.accent : AudioTone.muted,
-                        ),
-                        title: Text(
-                          qItem.name,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: TextStyle(
-                            fontSize: 13,
-                            color: isCur ? AudioTone.accent : AudioTone.ink,
+                      return Padding(
+                        padding: const EdgeInsets.only(bottom: 6),
+                        child: Material(
+                          color: isCur ? sand : surface,
+                          borderRadius: BorderRadius.circular(13),
+                          child: InkWell(
+                            borderRadius: BorderRadius.circular(13),
+                            onTap: () {
+                              if (isCur && playback.status == PlaybackStatus.idle) {
+                                playback.resumeSession();
+                              } else if (!isCur) {
+                                playback.jumpTo(i);
+                              }
+                            },
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 11),
+                              decoration: BoxDecoration(
+                                borderRadius: BorderRadius.circular(13),
+                                border: Border.all(
+                                  color: isCur ? accent.withValues(alpha: 0.4) : sandDeep,
+                                  width: 0.8,
+                                ),
+                              ),
+                              child: Row(
+                                children: [
+                                  SizedBox(
+                                    width: 28,
+                                    child: Text(
+                                      '${i + 1}'.padLeft(2, '0'),
+                                      style: TextStyle(
+                                        fontSize: 11.5,
+                                        fontWeight: isCur ? FontWeight.w700 : FontWeight.w500,
+                                        color: isCur ? accent : muted,
+                                        fontFeatures: kTabularFigures,
+                                      ),
+                                    ),
+                                  ),
+                                  Icon(
+                                    qItem.isVideo ? AppIcons.movie : AppIcons.musicNote,
+                                    size: 18,
+                                    color: isCur ? accent : muted,
+                                  ),
+                                  const SizedBox(width: 10),
+                                  Expanded(
+                                    child: Text(
+                                      qItem.name,
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: TextStyle(
+                                        fontSize: 13.5,
+                                        fontWeight: isCur ? FontWeight.w600 : FontWeight.w400,
+                                        color: isCur ? accent : ink,
+                                      ),
+                                    ),
+                                  ),
+                                  if (isCur) ...[
+                                    const SizedBox(width: 8),
+                                    PlayingWaveBars(playing: isPlaying, color: accent, size: 15),
+                                  ],
+                                ],
+                              ),
+                            ),
                           ),
                         ),
-                        onTap: () {
-                          if (isCur && playback.status == PlaybackStatus.idle) {
-                            playback.resumeSession();
-                          } else if (!isCur) {
-                            playback.jumpTo(i);
-                          }
-                        },
                       );
                     },
                   ),
@@ -309,6 +465,46 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
             ),
           ),
         ],
+      ),
+    );
+  }
+
+  Widget _portraitActionChip({
+    required IconData icon,
+    required String label,
+    required bool active,
+    bool enabled = true,
+    required Color sand,
+    required Color accent,
+    required Color ink,
+    required VoidCallback onTap,
+  }) {
+    final fg = !enabled ? ink.withValues(alpha: 0.35) : (active ? accent : ink);
+    return Material(
+      color: active ? accent.withValues(alpha: 0.14) : sand,
+      borderRadius: BorderRadius.circular(999),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(999),
+        onTap: enabled ? onTap : null,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 7),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(icon, size: 15, color: fg),
+              const SizedBox(width: 5),
+              Text(
+                label,
+                style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                  color: fg,
+                  fontFeatures: kTabularFigures,
+                ),
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }

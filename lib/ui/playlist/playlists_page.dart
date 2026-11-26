@@ -1,4 +1,4 @@
-/// 播单列表页：新建、进入详情、重命名、删除。
+/// 播单列表页：暖陶分组卡片、新建、进入详情、重命名、删除。
 library;
 
 import 'package:flutter/material.dart';
@@ -6,6 +6,9 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../data/app_database.dart';
 import '../../providers.dart';
+import '../app_theme.dart';
+import '../icons.dart';
+import '../widgets.dart';
 import 'current_queue_page.dart';
 import 'playlist_detail_page.dart';
 
@@ -31,61 +34,175 @@ class _PlaylistsPageState extends ConsumerState<PlaylistsPage> {
   @override
   Widget build(BuildContext context) {
     final db = ref.watch(dbProvider);
+    final playback = ref.watch(playbackProvider);
+    final sand = AppPalette.sandOf(context);
+    final sandDeep = AppPalette.sandDeepOf(context);
+    final accent = AppPalette.accentOf(context);
+    final ink = AppPalette.inkOf(context);
+    final muted = AppPalette.mutedOf(context);
+
     return Scaffold(
-      appBar: AppBar(title: const Text('播单')),
-      floatingActionButton: FloatingActionButton.extended(
-        icon: const Icon(Icons.add),
-        label: const Text('新建播单'),
-        onPressed: () => _create(context, db),
+      appBar: AppBar(title: const Text('播单', style: TextStyle(fontWeight: FontWeight.w600))),
+      floatingActionButton: ListenableBuilder(
+        listenable: playback,
+        builder: (context, _) => Padding(
+          padding: EdgeInsets.only(bottom: playback.current != null ? 8 : 0),
+          child: FloatingActionButton.extended(
+            icon: const Icon(Icons.add),
+            label: const Text('新建播单'),
+            onPressed: () => _create(context, db),
+          ),
+        ),
       ),
-      body: Column(
-        children: [
-          const CurrentPlaylistTile(),
-          const Divider(height: 1),
-          Expanded(
-            child: StreamBuilder<List<Playlist>>(
-              stream: _streamFor(db),
-              builder: (context, snap) {
-                final list = snap.data ?? [];
-                if (list.isEmpty) {
-                  return const Center(
-                    child: Text('还没有播单\n点右下角新建，进入播单后可添加文件', textAlign: TextAlign.center),
-                  );
-                }
-                return ListView.builder(
-                  padding: const EdgeInsets.only(bottom: 88),
-                  itemCount: list.length,
-                  itemBuilder: (context, i) {
-                    final p = list[i];
-                    return ListTile(
-                      leading: const Icon(Icons.playlist_play),
-                      title: Text(p.name),
-                      subtitle: Text(_fmtDate(p.createdAt)),
-                      trailing: PopupMenuButton<String>(
-                        onSelected: (action) {
-                          if (action == 'rename') _rename(context, db, p);
-                          if (action == 'delete') _delete(context, db, p);
-                        },
-                        itemBuilder: (_) => const [
-                          PopupMenuItem(value: 'rename', child: Text('重命名')),
-                          PopupMenuItem(value: 'delete', child: Text('删除播单')),
-                        ],
-                      ),
-                      onTap: () => Navigator.of(context).push(MaterialPageRoute<void>(
-                        builder: (_) => PlaylistDetailPage(playlistId: p.id, playlistName: p.name),
-                      )),
+      body: ListenableBuilder(
+        listenable: playback,
+        builder: (context, _) {
+          final bottomPad = playback.current != null
+              ? kMiniPlayerReservedPadding + 56
+              : 88.0;
+          return Column(
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 6, 16, 10),
+                child: InsetSectionCard(
+                  children: const [
+                    Padding(
+                      padding: EdgeInsets.symmetric(horizontal: 14, vertical: 2),
+                      child: CurrentPlaylistTile(),
+                    ),
+                  ],
+                ),
+              ),
+              Expanded(
+                child: StreamBuilder<List<Playlist>>(
+                  stream: _streamFor(db),
+                  builder: (context, snap) {
+                    final list = snap.data ?? [];
+                    if (list.isEmpty) {
+                      return Center(
+                        child: Text(
+                          '还没有播单\n点右下角新建，进入播单后可添加文件',
+                          textAlign: TextAlign.center,
+                          style: TextStyle(color: muted, height: 1.6),
+                        ),
+                      );
+                    }
+                    return ListView.separated(
+                      padding: EdgeInsets.fromLTRB(16, 4, 16, bottomPad),
+                      itemCount: list.length,
+                      separatorBuilder: (_, _) => const SizedBox(height: 10),
+                      itemBuilder: (context, i) {
+                        final p = list[i];
+                        return InsetSectionCard(
+                          children: [
+                            InkWell(
+                              onTap: () => Navigator.of(context).push(MaterialPageRoute<void>(
+                                builder: (_) =>
+                                    PlaylistDetailPage(playlistId: p.id, playlistName: p.name),
+                              )),
+                              child: Padding(
+                                padding: const EdgeInsets.fromLTRB(14, 12, 6, 12),
+                                child: Row(
+                                  children: [
+                                    // 叠层封面感图标
+                                    SizedBox(
+                                      width: 44,
+                                      height: 44,
+                                      child: Stack(
+                                        children: [
+                                          Positioned(
+                                            top: 0,
+                                            left: 4,
+                                            right: 4,
+                                            child: Container(
+                                              height: 8,
+                                              decoration: BoxDecoration(
+                                                color: sandDeep,
+                                                borderRadius: const BorderRadius.vertical(
+                                                  top: Radius.circular(6),
+                                                ),
+                                              ),
+                                            ),
+                                          ),
+                                          Positioned(
+                                            top: 5,
+                                            left: 0,
+                                            right: 0,
+                                            bottom: 0,
+                                            child: Container(
+                                              decoration: BoxDecoration(
+                                                color: sand,
+                                                borderRadius: BorderRadius.circular(11),
+                                              ),
+                                              alignment: Alignment.center,
+                                              child: Icon(
+                                                AppIcons.playlist,
+                                                size: 20,
+                                                color: accent,
+                                              ),
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                    const SizedBox(width: 12),
+                                    Expanded(
+                                      child: Column(
+                                        crossAxisAlignment: CrossAxisAlignment.start,
+                                        children: [
+                                          Text(
+                                            p.name,
+                                            maxLines: 1,
+                                            overflow: TextOverflow.ellipsis,
+                                            style: TextStyle(
+                                              fontSize: 15,
+                                              fontWeight: FontWeight.w600,
+                                              color: ink,
+                                            ),
+                                          ),
+                                          const SizedBox(height: 3),
+                                          Text(
+                                            _fmtDate(p.createdAt),
+                                            style: TextStyle(
+                                              fontSize: 12,
+                                              color: muted,
+                                              fontFeatures: kTabularFigures,
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                    PopupMenuButton<String>(
+                                      icon: Icon(AppIcons.more, color: muted),
+                                      onSelected: (action) {
+                                        if (action == 'rename') _rename(context, db, p);
+                                        if (action == 'delete') _delete(context, db, p);
+                                      },
+                                      itemBuilder: (_) => const [
+                                        PopupMenuItem(value: 'rename', child: Text('重命名')),
+                                        PopupMenuItem(value: 'delete', child: Text('删除播单')),
+                                      ],
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ),
+                          ],
+                        );
+                      },
                     );
                   },
-                );
-              },
-            ),
-          ),
-        ],
+                ),
+              ),
+            ],
+          );
+        },
       ),
     );
   }
 
-  String _fmtDate(DateTime d) => '${d.year}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')} 创建';
+  String _fmtDate(DateTime d) =>
+      '${d.year}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')} 创建';
 
   Future<void> _create(BuildContext context, AppDatabase db) async {
     final name = await _promptName(context, title: '新建播单');
@@ -118,8 +235,11 @@ class _PlaylistsPageState extends ConsumerState<PlaylistsPage> {
     if (ok == true) await db.deletePlaylist(p.id);
   }
 
-  Future<String?> _promptName(BuildContext context,
-      {required String title, String? initial}) {
+  Future<String?> _promptName(
+    BuildContext context, {
+    required String title,
+    String? initial,
+  }) {
     return showDialog<String>(
       context: context,
       builder: (context) => _PlaylistNameDialog(title: title, initial: initial),

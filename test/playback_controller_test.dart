@@ -939,4 +939,159 @@ void main() {
     await c.retryNow();
     expect(backend.openCalls.last.start, const Duration(seconds: 90));
   });
+
+  test('Phase3: 睡眠定时倒计时到点自动暂停；播完本集停阻止自动切下一曲并停在开头；cancel/stop 清零', () async {
+    final client = buildClient((endpoint, body) async {
+      final path = body['path'] as String? ?? '';
+      return {
+        'code': 200,
+        'data': {'name': path.split('/').last, 'raw_url': 'http://cdn$path', 'size': 100},
+      };
+    });
+
+    const items = [
+      QueueItem(path: '/book/ep1.mp3', name: 'ep1.mp3', isVideo: false),
+      QueueItem(path: '/book/ep2.mp3', name: 'ep2.mp3', isVideo: false),
+    ];
+    final c = PlaybackController(
+      api: () => client,
+      db: db,
+      settings: () => defaultSettings,
+      backend: backend,
+    );
+    addTearDown(c.dispose);
+
+    await c.replaceQueue(items, 0);
+    expect(c.status, PlaybackStatus.playing);
+    expect(c.hasSleepTimer, isFalse);
+    expect(c.sleepTimerShortLabel, '定时');
+
+    // 1. 倒计时到点自动暂停并复位
+    c.setSleepCountdown(const Duration(milliseconds: 60));
+    expect(c.sleepTimerMode, SleepTimerMode.countdown);
+    expect(c.hasSleepTimer, isTrue);
+    expect(c.sleepTimerShortLabel, '1m');
+
+    await Future<void>.delayed(const Duration(milliseconds: 120));
+    expect(c.sleepTimerMode, SleepTimerMode.off);
+    expect(c.status, PlaybackStatus.paused);
+    expect(backend.pausedCalled, isTrue);
+
+    // 2. 播完本集停：收到 completed 后不切下一曲，而是回到开头并暂停
+    await c.togglePlay();
+    c.setSleepEndOfTrack();
+    expect(c.sleepTimerMode, SleepTimerMode.endOfTrack);
+    expect(c.sleepTimerShortLabel, '本集末');
+
+    backend.emitCompleted();
+    await Future<void>.delayed(const Duration(milliseconds: 40));
+    expect(c.index, 0); // 仍留在第 1 集，未跳到 ep2
+    expect(c.sleepTimerMode, SleepTimerMode.off);
+    expect(c.status, PlaybackStatus.paused);
+    expect(c.currentPosition, Duration.zero);
+
+    // 3. cancelSleepTimer 与 stop 均可清理状态
+    c.setSleepCountdown(const Duration(minutes: 15));
+    expect(c.hasSleepTimer, isTrue);
+    c.cancelSleepTimer();
+    expect(c.hasSleepTimer, isFalse);
+
+    c.setSleepEndOfTrack();
+    await c.stop();
+    expect(c.hasSleepTimer, isFalse);
+    expect(c.sleepTimerMode, SleepTimerMode.off);
+  });
+
+  test('Phase3: 音频开播自动匹配并解析同目录 .lrc 歌词，切歌/停止时自动重置', () async {
+    final dio = Dio();
+    dio.httpClientAdapter = _LrcMixedAdapter();
+    final client = OpenListClient(
+      site: const SiteConfig(baseUrl: 'http://localhost:5244'),
+      dio: dio,
+    );
+    addTearDown(client.close);
+
+    const songWithLrc = QueueItem(path: '/music/rain.flac', name: 'rain.flac', isVideo: false);
+    const songNoLrc = QueueItem(path: '/music/plain.mp3', name: 'plain.mp3', isVideo: false);
+    final c = PlaybackController(
+      api: () => client,
+      db: db,
+      settings: () => defaultSettings,
+      backend: backend,
+    );
+    addTearDown(c.dispose);
+
+    await c.replaceQueue(const [songWithLrc, songNoLrc], 0);
+    await Future<void>.delayed(const Duration(milliseconds: 50));
+
+    expect(c.hasLyrics, isTrue);
+    expect(c.lyrics, hasLength(2));
+    expect(c.lyrics[0].text, '听见雨落的声音');
+    expect(c.lyrics[1].text, '在暖陶纸页间');
+
+    // 切到无歌词曲目后 lyrics 清空
+    await c.jumpTo(1);
+    await Future<void>.delayed(const Duration(milliseconds: 50));
+    expect(c.hasLyrics, isFalse);
+    expect(c.lyrics, isEmpty);
+  });
+}
+
+class _LrcMixedAdapter implements HttpClientAdapter {
+  @override
+  Future<ResponseBody> fetch(
+    RequestOptions options,
+    Stream<Uint8List>? requestStream,
+    Future<void>? cancelFuture,
+  ) async {
+    if (options.path == '/api/fs/list') {
+      return ResponseBody.fromString(
+        jsonEncode({
+          'code': 200,
+          'data': {
+            'content': [
+              {'name': 'rain.flac', 'is_dir': false, 'size': 4096},
+              {'name': 'rain.lrc', 'is_dir': false, 'size': 128},
+              {'name': 'plain.mp3', 'is_dir': false, 'size': 2048},
+            ],
+          },
+        }),
+        200,
+        headers: {
+          Headers.contentTypeHeader: [Headers.jsonContentType],
+        },
+      );
+    }
+    if (options.path == '/api/fs/get') {
+      final body = (options.data as Map<String, dynamic>?) ?? const {};
+      final path = body['path'] as String? ?? '';
+      return ResponseBody.fromString(
+        jsonEncode({
+          'code': 200,
+          'data': {
+            'name': path.split('/').last,
+            'raw_url': 'http://cdn$path',
+            'size': path.endsWith('.lrc') ? 128 : 4096,
+          },
+        }),
+        200,
+        headers: {
+          Headers.contentTypeHeader: [Headers.jsonContentType],
+        },
+      );
+    }
+    if (options.uri.toString() == 'http://cdn/music/rain.lrc') {
+      return ResponseBody.fromString(
+        '[00:02.00]听见雨落的声音\n[00:08.50]在暖陶纸页间\n',
+        200,
+        headers: {
+          Headers.contentTypeHeader: ['text/plain; charset=utf-8'],
+        },
+      );
+    }
+    return ResponseBody.fromString('', 404);
+  }
+
+  @override
+  void close({bool force = false}) {}
 }

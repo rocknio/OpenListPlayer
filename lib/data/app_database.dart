@@ -282,6 +282,40 @@ class AppDatabase extends _$AppDatabase {
   Stream<PlayProgress?> progressStream(String path) =>
       (select(playProgresses)..where((t) => t.path.equals(path))).watchSingleOrNull();
 
+  /// 按目录路径监听当前目录下所有直接子文件的全局播放进度（返回 path -> PlayProgress 映射）。
+  Stream<Map<String, PlayProgress>> directoryProgressesStream(String dirPath) {
+    final normalized = dirPath.endsWith('/') ? dirPath : '$dirPath/';
+    return (select(playProgresses)..where((t) => t.path.like('$normalized%'))).watch().map((rows) {
+      final map = <String, PlayProgress>{};
+      for (final row in rows) {
+        if (!row.path.startsWith(normalized)) continue;
+        final tail = row.path.substring(normalized.length);
+        // 仅保留直接子项，排除更深层子目录条目
+        if (tail.isNotEmpty && !tail.contains('/')) {
+          map[row.path] = row;
+        }
+      }
+      return map;
+    });
+  }
+
+  /// 按目录路径监听当前目录下已有播放历史记录的子文件路径集合，配合 [directoryProgressesStream]
+  /// 识别“已听完/看完（全局进度行已被删除但历史表有记录）”的条目。
+  Stream<Set<String>> directoryHistoryPathsStream(String dirPath) {
+    final normalized = dirPath.endsWith('/') ? dirPath : '$dirPath/';
+    return (select(playHistories)..where((t) => t.path.like('$normalized%'))).watch().map((rows) {
+      final set = <String>{};
+      for (final row in rows) {
+        if (!row.path.startsWith(normalized)) continue;
+        final tail = row.path.substring(normalized.length);
+        if (tail.isNotEmpty && !tail.contains('/')) {
+          set.add(row.path);
+        }
+      }
+      return set;
+    });
+  }
+
   // ---------- 播单独立进度 ----------
 
   /// 整个播单的进度流（详情页一次性拿到，按 path 建索引）

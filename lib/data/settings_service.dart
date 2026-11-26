@@ -13,6 +13,7 @@ class AppSettings {
     this.videoBackgroundAudio = true,
     this.bufferProfile = BufferProfile.balanced,
     this.globalSpeed = 1.0,
+    this.themePreference = AppThemePreference.light,
   });
 
   final SiteConfig? site;
@@ -21,6 +22,7 @@ class AppSettings {
   final bool videoBackgroundAudio;
   final BufferProfile bufferProfile;
   final double globalSpeed;
+  final AppThemePreference themePreference;
 
   AppSettings copyWith({
     SiteConfig? site,
@@ -30,6 +32,7 @@ class AppSettings {
     bool? videoBackgroundAudio,
     BufferProfile? bufferProfile,
     double? globalSpeed,
+    AppThemePreference? themePreference,
   }) =>
       AppSettings(
         site: clearSite ? null : (site ?? this.site),
@@ -38,6 +41,7 @@ class AppSettings {
         videoBackgroundAudio: videoBackgroundAudio ?? this.videoBackgroundAudio,
         bufferProfile: bufferProfile ?? this.bufferProfile,
         globalSpeed: globalSpeed ?? this.globalSpeed,
+        themePreference: themePreference ?? this.themePreference,
       );
 
   @override
@@ -49,7 +53,8 @@ class AppSettings {
           other.defaultPlayMode == defaultPlayMode &&
           other.videoBackgroundAudio == videoBackgroundAudio &&
           other.bufferProfile == bufferProfile &&
-          other.globalSpeed == globalSpeed;
+          other.globalSpeed == globalSpeed &&
+          other.themePreference == themePreference;
 
   @override
   int get hashCode => Object.hash(
@@ -59,6 +64,7 @@ class AppSettings {
         videoBackgroundAudio,
         bufferProfile,
         globalSpeed,
+        themePreference,
       );
 }
 
@@ -73,6 +79,7 @@ class SettingsService {
   static const _kVideoBgAudio = 'play.video_bg_audio';
   static const _kBuffer = 'play.buffer_profile';
   static const _kSpeed = 'play.global_speed';
+  static const _kTheme = 'ui.theme_mode';
 
   AppSettings load() {
     final rawUrl = _prefs.getString(_kSiteUrl);
@@ -91,6 +98,11 @@ class SettingsService {
       bufferProfile:
           _enumFromString(BufferProfile.values, _prefs.getString(_kBuffer), BufferProfile.balanced),
       globalSpeed: speed,
+      themePreference: _enumFromString(
+        AppThemePreference.values,
+        _prefs.getString(_kTheme),
+        AppThemePreference.light,
+      ),
     );
   }
 
@@ -115,6 +127,9 @@ class SettingsService {
   Future<void> saveBufferProfile(BufferProfile p) => _prefs.setString(_kBuffer, p.name);
 
   Future<void> saveGlobalSpeed(double s) => _prefs.setDouble(_kSpeed, s);
+
+  Future<void> saveThemePreference(AppThemePreference pref) =>
+      _prefs.setString(_kTheme, pref.name);
 
   T _enumFromString<T extends Enum>(List<T> values, String? s, T fallback) {
     if (s == null) return fallback;

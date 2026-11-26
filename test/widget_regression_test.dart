@@ -119,7 +119,7 @@ void main() {
     await tester.pump(const Duration(milliseconds: 1));
   }
 
-  testWidgets('H-8: HomePage 继续播放卡片在开播后自动隐藏、停止回到 idle 后重新显示', (tester) async {
+  testWidgets('H-8: HomePage 常驻英雄卡随播放状态在「继续播放 / 正在收听 / 已暂停」间实时切换', (tester) async {
     const item = QueueItem(path: '/music/ep1.mp3', name: '第一集.mp3', isVideo: false);
     await tester.runAsync(() async {
       await db.saveSession(
@@ -143,32 +143,40 @@ void main() {
         child: const MaterialApp(home: HomePage()),
       ),
     );
-    await tester.pumpAndSettle(
-      const Duration(milliseconds: 100),
-      EnginePhase.sendSemanticsUpdate,
-      const Duration(seconds: 10),
-    );
+    try {
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 50));
 
-    // 恢复态 idle：显示继续播放卡片（标题 + 按钮共 2 处"继续播放"，此处校验卡片按钮）
-    expect(find.text('第一集.mp3'), findsOneWidget);
-    expect(find.text('音频 · /music'), findsOneWidget);
-    expect(find.byIcon(Icons.play_arrow), findsOneWidget);
+      // 恢复态 idle：英雄卡显示「继续播放」与路径信息
+      expect(find.text('第一集.mp3'), findsOneWidget);
+      expect(find.text('音频 · /music'), findsOneWidget);
+      expect(find.text('继续播放'), findsNWidgets(2)); // 顶部状态标 + 主按钮
 
-    // 模拟在其它页面开播：status 变为 playing 并 notifyListeners()
-    await tester.runAsync(() => playback.replaceQueue(const [item], 0));
-    await tester.pump();
+      // 模拟在其它页面开播：status 变为 playing 并 notifyListeners()，英雄卡实时切为「正在收听 / 进入播放器」
+      // 注意：HomePage 在 FakeAsync zone 订阅了 drift 的 historyStream，replaceQueue 在真实 async 中写入
+      // playHistories 后，drift 会向 FakeAsync zone 派发一次零时长 Timer 来重查流；若在 runAsync 里持续 await
+      // 后续写库（saveSession）就会与等待 FakeAsync 推进的查询串行锁死。交替 pump 即可平滑完成。
+      Future<void>? openFuture;
+      await tester.runAsync(() async {
+        openFuture = playback.replaceQueue(const [item], 0);
+        await Future<void>.delayed(const Duration(milliseconds: 30));
+      });
+      await tester.pump(const Duration(milliseconds: 1));
+      await tester.runAsync(() => openFuture!);
+      await tester.pump();
+      expect(find.text('正在收听'), findsOneWidget);
+      expect(find.text('进入播放器'), findsOneWidget);
+      expect(find.text('继续播放'), findsNothing);
 
-    // 首页常驻未重建，但因 ListenableBuilder 包裹，继续播放卡片应立即消失
-    expect(find.text('音频 · /music'), findsNothing);
-    expect(find.byIcon(Icons.play_arrow), findsNothing);
-
-    // 停止回到 idle：继续播放卡片重新显示
-    await tester.runAsync(() => playback.stop());
-    await tester.pump();
-    expect(find.text('音频 · /music'), findsOneWidget);
-    expect(find.byIcon(Icons.play_arrow), findsOneWidget);
-
-    await closePage(tester);
+      // 停止回到 idle：英雄卡切回「继续播放」
+      await tester.runAsync(() => playback.stop());
+      await tester.pump();
+      expect(find.text('音频 · /music'), findsOneWidget);
+      expect(find.text('继续播放'), findsNWidgets(2));
+    } finally {
+      // 先卸载页面排空 drift 流取消零时长 Timer，避免与 tearDown db.close() 死锁
+      await closePage(tester);
+    }
   });
 
   testWidgets('H-6 & H-7: BrowserPage 取消最后一项多选不误退父目录；非当前 Tab 时 canPop 为 true',
@@ -203,10 +211,10 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('sub_song.mp3'), findsOneWidget);
 
-    // 长按选中唯一文件进入多选态
+    // 长按选中唯一文件进入多选态（顶部 AppBar 与底部浮岛均展示已选计数）
     await tester.longPress(find.text('sub_song.mp3'));
     await tester.pumpAndSettle();
-    expect(find.text('已选 1 项'), findsOneWidget);
+    expect(find.text('已选 1 项'), findsWidgets);
 
     // 再次点击取消最后一个选中项：应退出多选态，但仍留在"子目录"（绝不能退回根目录！）
     await tester.tap(find.text('sub_song.mp3'));
@@ -345,7 +353,9 @@ void main() {
       ),
     );
     await tester.tap(find.text('打开播放器'));
-    await tester.pumpAndSettle();
+    // AudioPage 播放中含唱片旋转 Ticker，使用定时 pump 推进路由转场动画
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 400));
     expect(find.byType(AudioPage), findsOneWidget);
 
     // 验证当切换到另一首音频时仍停留在 AudioPage
@@ -442,7 +452,9 @@ void main() {
 
     await tester.tap(find.text('待恢复歌曲.mp3'));
     await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 50)));
-    await tester.pumpAndSettle();
+    // AudioPage 播放中含唱片旋转 Ticker，使用定时 pump 完成 Sheet 入场动画
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 400));
 
     expect(backend.openCalls, hasLength(1));
     expect(backend.openCalls.single.start, const Duration(seconds: 25));
@@ -530,8 +542,11 @@ void main() {
     await tester.pump();
 
     expect(playback.speed, 1.5);
-    expect(find.text('https://nas.example.com:8443'), findsOneWidget);
-    expect(find.text('远程NAS'), findsOneWidget);
+    expect(find.text('https://nas.example.com:8443'), findsWidgets);
+    // 顶部连接状态胶囊与备注输入框均同步显示新站点名
+    expect(find.text('远程NAS'), findsWidgets);
+    final nameField = tester.widget<TextField>(find.byType(TextField).first);
+    expect(nameField.controller?.text, '远程NAS');
 
     await closePage(tester);
   });

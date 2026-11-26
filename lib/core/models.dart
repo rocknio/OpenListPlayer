@@ -137,6 +137,16 @@ enum PlayMode { sequentialLoop, repeatOne, shuffle }
 
 enum SortMode { natural, name, modified }
 
+enum AppThemePreference { system, light, dark }
+
+extension AppThemePreferenceLabel on AppThemePreference {
+  String get label => switch (this) {
+        AppThemePreference.light => '浅色',
+        AppThemePreference.dark => '深色',
+        AppThemePreference.system => '跟随系统',
+      };
+}
+
 enum BufferProfile { smooth, balanced, aggressive }
 
 extension BufferProfileSeconds on BufferProfile {

@@ -13,11 +13,14 @@ class AudioTone {
   /// 21201D 墨色（主文字）
   static const ink = Color(0xFF21201D);
 
-  /// 938A7E 暖灰（次要文字 / 图标）
-  static const muted = Color(0xFF938A7E);
+  /// 938A7E → 8A8074 暖石灰（次要文字 / 图标，微提对比度达 AA）
+  static const muted = Color(0xFF8A8074);
 
   /// B85C38 陶土（主色：进度、播放键、当前项）
   static const accent = Color(0xFFB85C38);
+
+  /// 4E7A5B 鼠尾草绿（已播完 / 已连接完成态语义）
+  static const success = Color(0xFF4E7A5B);
 
   /// FFFFFF 卡片白
   static const surface = Color(0xFFFFFFFF);
@@ -58,14 +61,16 @@ class AudioTone {
   static const gap = 18.0;
 }
 
-/// 封面/占位卡片的浅色网格底（设计稿里封面区是带细网格的浅灰格子）
+/// 封面/占位卡片的浅色/深色网格底（设计稿里封面区是带细网格的暖格）
 class GridBackdrop extends CustomPainter {
-  const GridBackdrop();
+  const GridBackdrop({this.isDark = false});
+
+  final bool isDark;
 
   @override
   void paint(Canvas canvas, Size size) {
     final paint = Paint()
-      ..color = const Color(0x0F21201D)
+      ..color = isDark ? const Color(0x14F2EDE6) : const Color(0x0F21201D)
       ..strokeWidth = 1;
     const step = 18.0;
     for (var x = step; x < size.width; x += step) {
@@ -77,5 +82,5 @@ class GridBackdrop extends CustomPainter {
   }
 
   @override
-  bool shouldRepaint(GridBackdrop oldDelegate) => false;
+  bool shouldRepaint(GridBackdrop oldDelegate) => oldDelegate.isDark != isDark;
 }
