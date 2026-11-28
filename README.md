@@ -22,7 +22,7 @@
 | 应用名称 | 云序（YUNXU），包名 `openlistplayer` / `com.songyaning.openlistplayer` |
 | 项目类型 | Flutter 移动端 App（Android / iOS） |
 | 角色定位 | openlist 的前端播放器，非网盘服务端 |
-| 当前版本 | 1.1.0（pubspec `1.1.0+2`） |
+| 当前版本 | 1.2.0（pubspec `1.2.0+3`） |
 | 视觉主题 | 纸感暖陶浅色 / 夜读暖曜深色 / 跟随系统（三态持久化） |
 | 认证方式 | v1 单站点、guest 免认证，`token` 为预留扩展位 |
 
