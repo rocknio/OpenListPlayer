@@ -14,6 +14,7 @@ class AppSettings {
     this.bufferProfile = BufferProfile.balanced,
     this.globalSpeed = 1.0,
     this.themePreference = AppThemePreference.light,
+    this.checkOpenP2pOnStart = true,
   });
 
   final SiteConfig? site;
@@ -23,6 +24,7 @@ class AppSettings {
   final BufferProfile bufferProfile;
   final double globalSpeed;
   final AppThemePreference themePreference;
+  final bool checkOpenP2pOnStart;
 
   AppSettings copyWith({
     SiteConfig? site,
@@ -33,6 +35,7 @@ class AppSettings {
     BufferProfile? bufferProfile,
     double? globalSpeed,
     AppThemePreference? themePreference,
+    bool? checkOpenP2pOnStart,
   }) =>
       AppSettings(
         site: clearSite ? null : (site ?? this.site),
@@ -42,6 +45,7 @@ class AppSettings {
         bufferProfile: bufferProfile ?? this.bufferProfile,
         globalSpeed: globalSpeed ?? this.globalSpeed,
         themePreference: themePreference ?? this.themePreference,
+        checkOpenP2pOnStart: checkOpenP2pOnStart ?? this.checkOpenP2pOnStart,
       );
 
   @override
@@ -54,7 +58,8 @@ class AppSettings {
           other.videoBackgroundAudio == videoBackgroundAudio &&
           other.bufferProfile == bufferProfile &&
           other.globalSpeed == globalSpeed &&
-          other.themePreference == themePreference;
+          other.themePreference == themePreference &&
+          other.checkOpenP2pOnStart == checkOpenP2pOnStart;
 
   @override
   int get hashCode => Object.hash(
@@ -65,6 +70,7 @@ class AppSettings {
         bufferProfile,
         globalSpeed,
         themePreference,
+        checkOpenP2pOnStart,
       );
 }
 
@@ -80,6 +86,7 @@ class SettingsService {
   static const _kBuffer = 'play.buffer_profile';
   static const _kSpeed = 'play.global_speed';
   static const _kTheme = 'ui.theme_mode';
+  static const _kCheckOpenP2p = 'network.check_openp2p';
 
   AppSettings load() {
     final rawUrl = _prefs.getString(_kSiteUrl);
@@ -103,6 +110,7 @@ class SettingsService {
         _prefs.getString(_kTheme),
         AppThemePreference.light,
       ),
+      checkOpenP2pOnStart: _prefs.getBool(_kCheckOpenP2p) ?? true,
     );
   }
 
@@ -130,6 +138,8 @@ class SettingsService {
 
   Future<void> saveThemePreference(AppThemePreference pref) =>
       _prefs.setString(_kTheme, pref.name);
+
+  Future<void> saveCheckOpenP2pOnStart(bool v) => _prefs.setBool(_kCheckOpenP2p, v);
 
   T _enumFromString<T extends Enum>(List<T> values, String? s, T fallback) {
     if (s == null) return fallback;

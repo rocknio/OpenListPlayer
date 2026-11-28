@@ -6,7 +6,9 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'core/models.dart';
 import 'core/openlist_client.dart';
+import 'core/openp2p_probe.dart';
 import 'data/app_database.dart';
+import 'data/openp2p_service.dart';
 import 'data/settings_service.dart';
 import 'player/audio_handler.dart';
 import 'player/playback_controller.dart';
@@ -31,6 +33,7 @@ class AppSettingsNotifier extends Notifier<AppSettings> {
     final nextUrl = s.site?.baseUrl;
     final playback = ref.read(playbackProvider);
     if (prevUrl != nextUrl) {
+      ref.read(openP2pMonitorProvider.notifier).reset();
       await playback.onSiteChanged();
     } else {
       playback.onSettingsChanged();
@@ -68,6 +71,14 @@ class AppSettingsNotifier extends Notifier<AppSettings> {
   Future<void> setThemePreference(AppThemePreference pref) async {
     await _svc.saveThemePreference(pref);
     state = _svc.load();
+  }
+
+  Future<void> setCheckOpenP2pOnStart(bool v) async {
+    await _svc.saveCheckOpenP2pOnStart(v);
+    state = _svc.load();
+    if (!v) {
+      ref.read(openP2pMonitorProvider.notifier).reset();
+    }
   }
 }
 
@@ -109,3 +120,12 @@ final audioHandlerProvider = Provider<PlayerAudioHandler>((ref) {
 
 /// SharedPreferences 原始实例（settingsServiceProvider 内部也需要）
 final sharedPreferencesProvider = Provider<SharedPreferences>((ref) => throw UnimplementedError());
+
+/// OpenP2P 原生平台桥接（测试可 override 为假实现）
+final openP2pBridgeProvider = Provider<OpenP2pBridge>((ref) => const PlatformOpenP2pBridge());
+
+/// OpenP2P 本地映射端口 TCP 探测函数（测试可 override）
+final openP2pTcpProbeProvider = Provider<TcpProbe>((ref) => defaultTcpProbe);
+
+/// OpenP2P 连通性检测与一键拉起状态监控
+final openP2pMonitorProvider = NotifierProvider<OpenP2pMonitor, OpenP2pState>(OpenP2pMonitor.new);
