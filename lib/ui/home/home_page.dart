@@ -316,12 +316,14 @@ class _OpenP2pBanner extends StatelessWidget {
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
     final canLaunch = state.status != OpenP2pStatus.notInstalled;
-    final checking = state.isChecking;
-    final (title, subtitle) = switch (state.status) {
-      OpenP2pStatus.notInstalled => ('未检测到 OpenP2P', '请先安装并运行 OpenP2P 端口映射后重试'),
-      OpenP2pStatus.unreachable => ('无法连接 OpenList', '本地映射端口已开启，请检查 OpenP2P 隧道状态'),
-      _ => ('OpenP2P 未运行', '需要启动手机上的 OpenP2P 才能连上家里的 OpenList'),
-    };
+    final checking = state.isChecking || state.isWaitingForTunnel;
+    final (title, subtitle) = state.isWaitingForTunnel
+        ? ('正在等待 OpenP2P 就绪…', 'OpenP2P 启动后通常需要 10~25 秒建立隧道，连通后将自动消失')
+        : switch (state.status) {
+            OpenP2pStatus.notInstalled => ('未检测到 OpenP2P', '请先安装并运行 OpenP2P 端口映射后重试'),
+            OpenP2pStatus.unreachable => ('无法连接 OpenList', '本地映射端口已开启，请检查 OpenP2P 隧道状态'),
+            _ => ('OpenP2P 未运行', '需要启动手机上的 OpenP2P 才能连上家里的 OpenList'),
+          };
 
     return Container(
       padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),

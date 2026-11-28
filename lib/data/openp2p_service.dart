@@ -59,6 +59,7 @@ class OpenP2pState {
   const OpenP2pState({
     this.status = OpenP2pStatus.idle,
     this.isChecking = false,
+    this.isWaitingForTunnel = false,
     this.hasPromptedThisSession = false,
     this.shouldPrompt = false,
     this.launchedThisSession = false,
@@ -66,6 +67,7 @@ class OpenP2pState {
 
   final OpenP2pStatus status;
   final bool isChecking;
+  final bool isWaitingForTunnel;
   final bool hasPromptedThisSession;
   final bool shouldPrompt;
   final bool launchedThisSession;
@@ -78,6 +80,7 @@ class OpenP2pState {
   OpenP2pState copyWith({
     OpenP2pStatus? status,
     bool? isChecking,
+    bool? isWaitingForTunnel,
     bool? hasPromptedThisSession,
     bool? shouldPrompt,
     bool? launchedThisSession,
@@ -85,6 +88,7 @@ class OpenP2pState {
       OpenP2pState(
         status: status ?? this.status,
         isChecking: isChecking ?? this.isChecking,
+        isWaitingForTunnel: isWaitingForTunnel ?? this.isWaitingForTunnel,
         hasPromptedThisSession: hasPromptedThisSession ?? this.hasPromptedThisSession,
         shouldPrompt: shouldPrompt ?? this.shouldPrompt,
         launchedThisSession: launchedThisSession ?? this.launchedThisSession,
@@ -96,11 +100,18 @@ class OpenP2pState {
       other is OpenP2pState &&
           other.status == status &&
           other.isChecking == isChecking &&
+          other.isWaitingForTunnel == isWaitingForTunnel &&
           other.hasPromptedThisSession == hasPromptedThisSession &&
           other.shouldPrompt == shouldPrompt &&
           other.launchedThisSession == launchedThisSession;
 
   @override
-  int get hashCode =>
-      Object.hash(status, isChecking, hasPromptedThisSession, shouldPrompt, launchedThisSession);
+  int get hashCode => Object.hash(
+        status,
+        isChecking,
+        isWaitingForTunnel,
+        hasPromptedThisSession,
+        shouldPrompt,
+        launchedThisSession,
+      );
 }

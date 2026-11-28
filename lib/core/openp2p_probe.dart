@@ -63,13 +63,16 @@ Future<bool> defaultTcpProbe(String host, int port, Duration timeout) async {
 }
 
 /// 联合探测 OpenP2P 映射端口与 OpenList `/ping` 连通状态。
+/// 本机映射端口已监听但首次 `/ping` 失败时，会延迟 [pingRetryDelay] 后再试一次，
+/// 避免 OpenP2P 刚唤醒或隧道瞬时抖动造成误判。
 Future<OpenP2pStatus> probeOpenP2p({
   required SiteConfig site,
   required TcpProbe tcpProbe,
   required PingProbe pingProbe,
   required AppInstalledChecker isAppInstalled,
   Duration tcpTimeout = const Duration(milliseconds: 1500),
-  Duration pingTimeout = const Duration(milliseconds: 2500),
+  Duration pingTimeout = const Duration(milliseconds: 4000),
+  Duration pingRetryDelay = const Duration(milliseconds: 600),
 }) async {
   final uri = Uri.tryParse(site.baseUrl);
   if (uri == null || uri.host.isEmpty) {
@@ -83,7 +86,13 @@ Future<OpenP2pStatus> probeOpenP2p({
       final installed = await isAppInstalled(kOpenP2pPackageName);
       return installed ? OpenP2pStatus.notRunning : OpenP2pStatus.notInstalled;
     }
-    final pingOk = await pingProbe(site, pingTimeout);
+    var pingOk = await pingProbe(site, pingTimeout);
+    if (!pingOk) {
+      if (pingRetryDelay > Duration.zero) {
+        await Future<void>.delayed(pingRetryDelay);
+      }
+      pingOk = await pingProbe(site, pingTimeout);
+    }
     return pingOk ? OpenP2pStatus.connected : OpenP2pStatus.unreachable;
   }
 

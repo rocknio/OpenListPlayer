@@ -57,7 +57,7 @@ class _AppState extends ConsumerState<App> with WidgetsBindingObserver {
       case AppLifecycleState.resumed:
         final p2p = ref.read(openP2pMonitorProvider);
         if (p2p.needsAttention || p2p.launchedThisSession) {
-          unawaited(ref.read(openP2pMonitorProvider.notifier).check(allowPrompt: false));
+          unawaited(ref.read(openP2pMonitorProvider.notifier).checkOnResume());
         }
         break;
       case AppLifecycleState.inactive:

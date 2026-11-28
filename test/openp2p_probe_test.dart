@@ -94,14 +94,36 @@ void main() {
       expect(status, OpenP2pStatus.connected);
     });
 
-    test('TCP 通但 /ping 失败 → unreachable', () async {
+    test('TCP 通但 /ping 首次抖动失败、重试成功 → connected', () async {
+      var pingAttempts = 0;
       final status = await probeOpenP2p(
         site: localSite,
         tcpProbe: (_, _, _) async => true,
-        pingProbe: (_, _) async => false,
+        pingProbe: (_, _) async {
+          pingAttempts++;
+          return pingAttempts >= 2;
+        },
         isAppInstalled: (_) async => true,
+        pingRetryDelay: Duration.zero,
+      );
+      expect(status, OpenP2pStatus.connected);
+      expect(pingAttempts, 2);
+    });
+
+    test('TCP 通但 /ping 连续失败 → unreachable', () async {
+      var pingAttempts = 0;
+      final status = await probeOpenP2p(
+        site: localSite,
+        tcpProbe: (_, _, _) async => true,
+        pingProbe: (_, _) async {
+          pingAttempts++;
+          return false;
+        },
+        isAppInstalled: (_) async => true,
+        pingRetryDelay: Duration.zero,
       );
       expect(status, OpenP2pStatus.unreachable);
+      expect(pingAttempts, 2);
     });
   });
 

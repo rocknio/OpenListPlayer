@@ -326,4 +326,70 @@ void main() {
     expect(container.read(openP2pMonitorProvider).status, OpenP2pStatus.idle);
     expect(container.read(openP2pMonitorProvider).isChecking, isFalse);
   });
+
+  test('拉起 OpenP2P 后切回前台（checkOnResume）：首次未就绪自动轮询，隧道就绪后立即停止并切为 connected',
+      () async {
+    var attempts = 0;
+    final bridge = FakeOpenP2pBridge(isSupported: true, installed: true, launchResult: true);
+    SharedPreferences.setMockInitialValues({'site.url': 'http://127.0.0.1:5244'});
+    final prefs = await SharedPreferences.getInstance();
+    final db = AppDatabase(NativeDatabase.memory());
+    final dio = Dio()..httpClientAdapter = _PingAdapter(() => attempts >= 3);
+    final container = ProviderContainer(
+      overrides: [
+        sharedPreferencesProvider.overrideWithValue(prefs),
+        settingsServiceProvider.overrideWithValue(SettingsService(prefs)),
+        dbProvider.overrideWithValue(db),
+        apiProvider.overrideWith((ref) {
+          final site = ref.watch(settingsProvider.select((s) => s.site));
+          return OpenListClient(
+            site: site ?? const SiteConfig(baseUrl: ''),
+            dio: dio,
+          );
+        }),
+        playbackProvider.overrideWith((ref) {
+          final c = PlaybackController(
+            api: () => ref.read(apiProvider),
+            db: db,
+            settings: () => ref.read(settingsProvider),
+            backend: FakePlayerBackend(),
+          );
+          ref.onDispose(c.dispose);
+          return c;
+        }),
+        openP2pBridgeProvider.overrideWithValue(bridge),
+        openP2pTcpProbeProvider.overrideWithValue((_, _, _) async {
+          attempts++;
+          return attempts >= 3;
+        }),
+        openP2pPollIntervalProvider.overrideWithValue(const Duration(milliseconds: 20)),
+        openP2pMaxPollAttemptsProvider.overrideWithValue(5),
+      ],
+    );
+    addTearDown(() async {
+      container.dispose();
+      await db.close();
+    });
+
+    final monitor = container.read(openP2pMonitorProvider.notifier);
+    // 1. 冷启动探测（第 1 次失败）
+    expect(await monitor.check(allowPrompt: true), OpenP2pStatus.notRunning);
+    monitor.markPromptHandled();
+
+    // 2. 用户点启动 OpenP2P
+    expect(await monitor.launchOpenP2p(), isTrue);
+
+    // 3. 切回云序瞬间（第 2 次仍未就绪）→ 进入自动轮询等待状态
+    final resumeResult = await monitor.checkOnResume();
+    expect(resumeResult, OpenP2pStatus.notRunning);
+    expect(container.read(openP2pMonitorProvider).isWaitingForTunnel, isTrue);
+
+    // 4. 等待轮询触发第 3 次探测成功 → 自动变为 connected 并结束轮询
+    await Future<void>.delayed(const Duration(milliseconds: 120));
+    final finalState = container.read(openP2pMonitorProvider);
+    expect(finalState.status, OpenP2pStatus.connected);
+    expect(finalState.isWaitingForTunnel, isFalse);
+    expect(finalState.needsAttention, isFalse);
+    expect(finalState.shouldPrompt, isFalse);
+  });
 }
