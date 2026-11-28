@@ -60,7 +60,7 @@ void main() {
           expect(port, 5244);
           return false;
         },
-        pingProbe: (_, __) async {
+        pingProbe: (_, _) async {
           pingCalled = true;
           return true;
         },
@@ -77,8 +77,8 @@ void main() {
     test('TCP 拒连且未安装 cn.openp2p → notInstalled', () async {
       final status = await probeOpenP2p(
         site: localSite,
-        tcpProbe: (_, __, ___) async => false,
-        pingProbe: (_, __) async => false,
+        tcpProbe: (_, _, _) async => false,
+        pingProbe: (_, _) async => false,
         isAppInstalled: (_) async => false,
       );
       expect(status, OpenP2pStatus.notInstalled);
@@ -87,8 +87,8 @@ void main() {
     test('TCP 通且 /ping 通 → connected', () async {
       final status = await probeOpenP2p(
         site: localSite,
-        tcpProbe: (_, __, ___) async => true,
-        pingProbe: (_, __) async => true,
+        tcpProbe: (_, _, _) async => true,
+        pingProbe: (_, _) async => true,
         isAppInstalled: (_) async => true,
       );
       expect(status, OpenP2pStatus.connected);
@@ -97,8 +97,8 @@ void main() {
     test('TCP 通但 /ping 失败 → unreachable', () async {
       final status = await probeOpenP2p(
         site: localSite,
-        tcpProbe: (_, __, ___) async => true,
-        pingProbe: (_, __) async => false,
+        tcpProbe: (_, _, _) async => true,
+        pingProbe: (_, _) async => false,
         isAppInstalled: (_) async => true,
       );
       expect(status, OpenP2pStatus.unreachable);
@@ -112,11 +112,11 @@ void main() {
       var tcpCalled = false;
       final status = await probeOpenP2p(
         site: lanSite,
-        tcpProbe: (_, __, ___) async {
+        tcpProbe: (_, _, _) async {
           tcpCalled = true;
           return false;
         },
-        pingProbe: (_, __) async => true,
+        pingProbe: (_, _) async => true,
         isAppInstalled: (_) async => true,
       );
       expect(status, OpenP2pStatus.connected);
@@ -126,8 +126,8 @@ void main() {
     test('ping 失败且已安装 cn.openp2p → notRunning', () async {
       final status = await probeOpenP2p(
         site: lanSite,
-        tcpProbe: (_, __, ___) async => false,
-        pingProbe: (_, __) async => false,
+        tcpProbe: (_, _, _) async => false,
+        pingProbe: (_, _) async => false,
         isAppInstalled: (_) async => true,
       );
       expect(status, OpenP2pStatus.notRunning);
@@ -136,8 +136,8 @@ void main() {
     test('ping 失败且未安装 cn.openp2p → idle（不误报）', () async {
       final status = await probeOpenP2p(
         site: lanSite,
-        tcpProbe: (_, __, ___) async => false,
-        pingProbe: (_, __) async => false,
+        tcpProbe: (_, _, _) async => false,
+        pingProbe: (_, _) async => false,
         isAppInstalled: (_) async => false,
       );
       expect(status, OpenP2pStatus.idle);

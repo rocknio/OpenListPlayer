@@ -109,7 +109,7 @@ void main() {
     final container = await createContainer(
       initialPrefs: {'site.url': 'http://127.0.0.1:5244'},
       bridge: bridge,
-      tcpProbe: (_, __, ___) async {
+      tcpProbe: (_, _, _) async {
         tcpCalled = true;
         return false;
       },
@@ -132,7 +132,7 @@ void main() {
         'network.check_openp2p': false,
       },
       bridge: bridge,
-      tcpProbe: (_, __, ___) async => false,
+      tcpProbe: (_, _, _) async => false,
     );
     expect(
       await c1.read(openP2pMonitorProvider.notifier).check(allowPrompt: true),
@@ -143,7 +143,7 @@ void main() {
     final c2 = await createContainer(
       initialPrefs: {},
       bridge: bridge,
-      tcpProbe: (_, __, ___) async => false,
+      tcpProbe: (_, _, _) async => false,
     );
     expect(
       await c2.read(openP2pMonitorProvider.notifier).check(allowPrompt: true),
@@ -157,7 +157,7 @@ void main() {
     final container = await createContainer(
       initialPrefs: {'site.url': 'http://127.0.0.1:5244'},
       bridge: bridge,
-      tcpProbe: (_, __, ___) async => false,
+      tcpProbe: (_, _, _) async => false,
     );
     final monitor = container.read(openP2pMonitorProvider.notifier);
 
@@ -184,7 +184,7 @@ void main() {
     final container = await createContainer(
       initialPrefs: {'site.url': 'http://127.0.0.1:5244'},
       bridge: bridge,
-      tcpProbe: (_, __, ___) async => tcpReady,
+      tcpProbe: (_, _, _) async => tcpReady,
       pingOk: () => tcpReady,
     );
     final monitor = container.read(openP2pMonitorProvider.notifier);
@@ -211,7 +211,7 @@ void main() {
     final container = await createContainer(
       initialPrefs: {'site.url': 'http://127.0.0.1:5244'},
       bridge: bridge,
-      tcpProbe: (_, __, ___) => completer.future,
+      tcpProbe: (_, _, _) => completer.future,
     );
     final monitor = container.read(openP2pMonitorProvider.notifier);
 
