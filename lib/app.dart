@@ -8,6 +8,8 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'core/models.dart';
+import 'core/openp2p_probe.dart';
+import 'data/openp2p_service.dart';
 import 'providers.dart';
 import 'ui/app_theme.dart';
 import 'ui/browser/browser_page.dart';
@@ -52,8 +54,13 @@ class _AppState extends ConsumerState<App> with WidgetsBindingObserver {
           await playback.onAppPaused();
         }());
         break;
-      case AppLifecycleState.inactive:
       case AppLifecycleState.resumed:
+        final p2p = ref.read(openP2pMonitorProvider);
+        if (p2p.needsAttention || p2p.launchedThisSession) {
+          unawaited(ref.read(openP2pMonitorProvider.notifier).check(allowPrompt: false));
+        }
+        break;
+      case AppLifecycleState.inactive:
       case AppLifecycleState.hidden:
         break;
     }
@@ -87,9 +94,84 @@ class AppShell extends ConsumerStatefulWidget {
 
 class _AppShellState extends ConsumerState<AppShell> {
   static const _pages = [HomePage(), BrowserPage(), PlaylistsPage(), SettingsPage()];
+  bool _p2pDialogOpen = false;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      unawaited(ref.read(openP2pMonitorProvider.notifier).check(allowPrompt: true));
+    });
+  }
+
+  Future<void> _showOpenP2pDialog(OpenP2pStatus status) async {
+    if (_p2pDialogOpen || !mounted) return;
+    _p2pDialogOpen = true;
+    ref.read(openP2pMonitorProvider.notifier).markPromptHandled();
+    final (title, content, canLaunch) = switch (status) {
+      OpenP2pStatus.notInstalled => (
+          '未检测到 OpenP2P',
+          '当前配置的站点使用本机端口映射，需要安装并运行 OpenP2P 客户端才能连接家里的 OpenList。',
+          false,
+        ),
+      OpenP2pStatus.unreachable => (
+          '无法连接到 OpenList',
+          '本地映射端口已响应，但暂时无法连上家里的 OpenList 服务。请检查 OpenP2P 隧道状态或服务端是否在线。',
+          true,
+        ),
+      _ => (
+          'OpenP2P 似乎未运行',
+          '云序需要通过手机上的 OpenP2P 端口映射才能连接家里的 OpenList 服务，是否立即启动 OpenP2P？',
+          true,
+        ),
+    };
+
+    try {
+      final shouldLaunch = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: Text(title),
+          content: Text(content),
+          actions: [
+            if (canLaunch) ...[
+              TextButton(
+                onPressed: () => Navigator.pop(ctx, false),
+                child: const Text('暂不启动'),
+              ),
+              FilledButton(
+                onPressed: () => Navigator.pop(ctx, true),
+                child: const Text('启动 OpenP2P'),
+              ),
+            ] else
+              FilledButton(
+                onPressed: () => Navigator.pop(ctx, false),
+                child: const Text('知道了'),
+              ),
+          ],
+        ),
+      );
+      if (shouldLaunch == true && mounted) {
+        final ok = await ref.read(openP2pMonitorProvider.notifier).launchOpenP2p();
+        if (!ok && mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('未能拉起 OpenP2P，请手动打开')),
+          );
+        }
+      }
+    } finally {
+      _p2pDialogOpen = false;
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
+    ref.listen<OpenP2pState>(openP2pMonitorProvider, (prev, next) {
+      if (next.shouldPrompt && !_p2pDialogOpen) {
+        unawaited(_showOpenP2pDialog(next.status));
+      }
+    });
+
     final tabIndex = ref.watch(tabIndexProvider);
     return Scaffold(
       body: IndexedStack(index: tabIndex, children: _pages),

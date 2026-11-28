@@ -7,7 +7,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/models.dart';
+import '../../core/openp2p_probe.dart';
 import '../../data/app_database.dart';
+import '../../data/openp2p_service.dart';
 import '../../player/playback_controller.dart';
 import '../../providers.dart';
 import '../app_theme.dart';
@@ -97,6 +99,7 @@ class _HomePageState extends ConsumerState<HomePage> {
     final db = ref.watch(dbProvider);
     _ensureStreams(db);
     final playback = ref.watch(playbackProvider);
+    final openP2p = ref.watch(openP2pMonitorProvider);
 
     return Scaffold(
       appBar: AppBar(
@@ -108,6 +111,7 @@ class _HomePageState extends ConsumerState<HomePage> {
             const Spacer(),
             _SiteStatusPill(
               label: site.display,
+              hasIssue: openP2p.needsAttention,
               onTap: () => ref.read(tabIndexProvider.notifier).set(3),
             ),
           ],
@@ -120,6 +124,22 @@ class _HomePageState extends ConsumerState<HomePage> {
           return ListView(
             padding: EdgeInsets.fromLTRB(16, 6, 16, bottomPad),
             children: [
+              if (openP2p.needsAttention) ...[
+                _OpenP2pBanner(
+                  state: openP2p,
+                  onLaunch: () async {
+                    final ok = await ref.read(openP2pMonitorProvider.notifier).launchOpenP2p();
+                    if (!ok && context.mounted) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(content: Text('未能拉起 OpenP2P，请手动打开')),
+                      );
+                    }
+                  },
+                  onRecheck: () =>
+                      ref.read(openP2pMonitorProvider.notifier).check(allowPrompt: false),
+                ),
+                const SizedBox(height: 12),
+              ],
               const _HeroResumeCard(),
               // 最近播放（盘活 DB 既有 historyStream）
               StreamBuilder<List<PlayHistory>>(
@@ -232,13 +252,19 @@ class _HomePageState extends ConsumerState<HomePage> {
 }
 
 class _SiteStatusPill extends StatelessWidget {
-  const _SiteStatusPill({required this.label, required this.onTap});
+  const _SiteStatusPill({
+    required this.label,
+    required this.onTap,
+    this.hasIssue = false,
+  });
   final String label;
   final VoidCallback onTap;
+  final bool hasIssue;
 
   @override
   Widget build(BuildContext context) {
-    final success = AppPalette.successOf(context);
+    final dotColor =
+        hasIssue ? Theme.of(context).colorScheme.error : AppPalette.successOf(context);
     final sand = AppPalette.sandOf(context);
     final ink = AppPalette.inkOf(context);
     return InkWell(
@@ -257,7 +283,7 @@ class _SiteStatusPill extends StatelessWidget {
             Container(
               width: 7,
               height: 7,
-              decoration: BoxDecoration(color: success, shape: BoxShape.circle),
+              decoration: BoxDecoration(color: dotColor, shape: BoxShape.circle),
             ),
             const SizedBox(width: 6),
             Flexible(
@@ -270,6 +296,89 @@ class _SiteStatusPill extends StatelessWidget {
             ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+class _OpenP2pBanner extends StatelessWidget {
+  const _OpenP2pBanner({
+    required this.state,
+    required this.onLaunch,
+    required this.onRecheck,
+  });
+
+  final OpenP2pState state;
+  final VoidCallback onLaunch;
+  final VoidCallback onRecheck;
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    final canLaunch = state.status != OpenP2pStatus.notInstalled;
+    final checking = state.status == OpenP2pStatus.checking;
+    final (title, subtitle) = switch (state.status) {
+      OpenP2pStatus.notInstalled => ('未检测到 OpenP2P', '请先安装并运行 OpenP2P 端口映射后重试'),
+      OpenP2pStatus.unreachable => ('无法连接 OpenList', '本地映射端口已开启，请检查 OpenP2P 隧道状态'),
+      _ => ('OpenP2P 未运行', '需要启动手机上的 OpenP2P 才能连上家里的 OpenList'),
+    };
+
+    return Container(
+      padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
+      decoration: BoxDecoration(
+        color: cs.errorContainer,
+        borderRadius: BorderRadius.circular(16),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(AppIcons.cloud, size: 18, color: cs.onErrorContainer),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  title,
+                  style: TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w600,
+                    color: cs.onErrorContainer,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 4),
+          Text(
+            subtitle,
+            style: TextStyle(fontSize: 12, color: cs.onErrorContainer),
+          ),
+          const SizedBox(height: 10),
+          Row(
+            children: [
+              if (canLaunch) ...[
+                FilledButton.tonal(
+                  onPressed: onLaunch,
+                  style: FilledButton.styleFrom(
+                    visualDensity: VisualDensity.compact,
+                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+                  ),
+                  child: const Text('启动 OpenP2P'),
+                ),
+                const SizedBox(width: 8),
+              ],
+              TextButton(
+                onPressed: checking ? null : onRecheck,
+                style: TextButton.styleFrom(
+                  foregroundColor: cs.onErrorContainer,
+                  visualDensity: VisualDensity.compact,
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                ),
+                child: const Text('重新检测'),
+              ),
+            ],
+          ),
+        ],
       ),
     );
   }

@@ -200,6 +200,16 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                       ),
                     ),
                   ],
+                  const SizedBox(height: 12),
+                  Divider(height: 1, color: dividerColor),
+                  SwitchListTile(
+                    contentPadding: EdgeInsets.zero,
+                    title: const Text('启动时检测 OpenP2P'),
+                    subtitle: const Text('未连通时提示并一键拉起 OpenP2P'),
+                    value: settings.checkOpenP2pOnStart,
+                    onChanged: (v) =>
+                        ref.read(settingsProvider.notifier).setCheckOpenP2pOnStart(v),
+                  ),
                 ],
               ),
 
