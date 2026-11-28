@@ -80,6 +80,22 @@ class OpenListClient {
         if (site.token != null && site.token!.isNotEmpty) 'Authorization': site.token!,
       };
 
+  /// 轻量快速连通性探测：仅请求 `/ping`，任何异常或超时均返回 false。
+  Future<bool> ping({Duration timeout = const Duration(milliseconds: 2500)}) async {
+    if (_dio.options.baseUrl.isEmpty) return false;
+    try {
+      final pong = await _dio
+          .get<String>(
+            '/ping',
+            options: Options(sendTimeout: timeout, receiveTimeout: timeout),
+          )
+          .timeout(timeout);
+      return pong.statusCode == 200 && pong.data?.trim() == 'pong';
+    } catch (_) {
+      return false;
+    }
+  }
+
   /// 连接测试：/ping + 拉根目录。返回根目录条目数，失败抛异常。
   Future<int> testConnection() async {
     _ensureConfigured();
