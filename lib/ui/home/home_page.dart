@@ -316,7 +316,7 @@ class _OpenP2pBanner extends StatelessWidget {
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
     final canLaunch = state.status != OpenP2pStatus.notInstalled;
-    final checking = state.status == OpenP2pStatus.checking;
+    final checking = state.isChecking;
     final (title, subtitle) = switch (state.status) {
       OpenP2pStatus.notInstalled => ('未检测到 OpenP2P', '请先安装并运行 OpenP2P 端口映射后重试'),
       OpenP2pStatus.unreachable => ('无法连接 OpenList', '本地映射端口已开启，请检查 OpenP2P 隧道状态'),
@@ -374,7 +374,23 @@ class _OpenP2pBanner extends StatelessWidget {
                   visualDensity: VisualDensity.compact,
                   padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
                 ),
-                child: const Text('重新检测'),
+                child: checking
+                    ? Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          SizedBox(
+                            width: 12,
+                            height: 12,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 1.8,
+                              color: cs.onErrorContainer,
+                            ),
+                          ),
+                          const SizedBox(width: 6),
+                          const Text('检测中'),
+                        ],
+                      )
+                    : const Text('重新检测'),
               ),
             ],
           ),

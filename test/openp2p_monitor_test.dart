@@ -5,15 +5,20 @@ import 'dart:async';
 import 'dart:typed_data';
 
 import 'package:dio/dio.dart';
+import 'package:drift/native.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:openlistplayer/core/models.dart';
 import 'package:openlistplayer/core/openlist_client.dart';
 import 'package:openlistplayer/core/openp2p_probe.dart';
+import 'package:openlistplayer/data/app_database.dart';
 import 'package:openlistplayer/data/openp2p_service.dart';
 import 'package:openlistplayer/data/settings_service.dart';
+import 'package:openlistplayer/player/playback_controller.dart';
 import 'package:openlistplayer/providers.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+
+import 'playback_controller_test.dart' show FakePlayerBackend;
 
 class FakeOpenP2pBridge implements OpenP2pBridge {
   FakeOpenP2pBridge({
@@ -72,11 +77,13 @@ void main() {
     SharedPreferences.setMockInitialValues(initialPrefs);
     final prefs = await SharedPreferences.getInstance();
     final svc = SettingsService(prefs);
+    final db = AppDatabase(NativeDatabase.memory());
     final dio = Dio()..httpClientAdapter = _PingAdapter(pingOk ?? () => true);
     final container = ProviderContainer(
       overrides: [
         sharedPreferencesProvider.overrideWithValue(prefs),
         settingsServiceProvider.overrideWithValue(svc),
+        dbProvider.overrideWithValue(db),
         apiProvider.overrideWith((ref) {
           final site = ref.watch(settingsProvider.select((s) => s.site));
           return OpenListClient(
@@ -84,11 +91,24 @@ void main() {
             dio: dio,
           );
         }),
+        playbackProvider.overrideWith((ref) {
+          final c = PlaybackController(
+            api: () => ref.read(apiProvider),
+            db: db,
+            settings: () => ref.read(settingsProvider),
+            backend: FakePlayerBackend(),
+          );
+          ref.onDispose(c.dispose);
+          return c;
+        }),
         openP2pBridgeProvider.overrideWithValue(bridge),
         openP2pTcpProbeProvider.overrideWithValue(tcpProbe),
       ],
     );
-    addTearDown(container.dispose);
+    addTearDown(() async {
+      container.dispose();
+      await db.close();
+    });
     return container;
   }
 
@@ -216,10 +236,11 @@ void main() {
     final monitor = container.read(openP2pMonitorProvider.notifier);
 
     final pending = monitor.check(allowPrompt: true);
-    expect(container.read(openP2pMonitorProvider).status, OpenP2pStatus.checking);
+    expect(container.read(openP2pMonitorProvider).isChecking, isTrue);
 
     monitor.reset();
     expect(container.read(openP2pMonitorProvider).status, OpenP2pStatus.idle);
+    expect(container.read(openP2pMonitorProvider).isChecking, isFalse);
 
     completer.complete(false);
     await pending;
@@ -227,5 +248,82 @@ void main() {
     final state = container.read(openP2pMonitorProvider);
     expect(state.status, OpenP2pStatus.idle);
     expect(state.shouldPrompt, isFalse);
+  });
+
+  test('复检期间保留既有异常 status 且置 isChecking=true，不引起横幅闪退', () async {
+    var firstDone = false;
+    final secondCompleter = Completer<bool>();
+    final bridge = FakeOpenP2pBridge(isSupported: true, installed: true);
+    final container = await createContainer(
+      initialPrefs: {'site.url': 'http://127.0.0.1:5244'},
+      bridge: bridge,
+      tcpProbe: (_, _, _) async {
+        if (!firstDone) {
+          firstDone = true;
+          return false;
+        }
+        return secondCompleter.future;
+      },
+    );
+    final monitor = container.read(openP2pMonitorProvider.notifier);
+
+    await monitor.check(allowPrompt: true);
+    expect(container.read(openP2pMonitorProvider).status, OpenP2pStatus.notRunning);
+    expect(container.read(openP2pMonitorProvider).isChecking, isFalse);
+
+    final recheck = monitor.check(allowPrompt: false);
+    final during = container.read(openP2pMonitorProvider);
+    expect(during.isChecking, isTrue);
+    expect(during.status, OpenP2pStatus.notRunning);
+    expect(during.needsAttention, isTrue);
+
+    secondCompleter.complete(true);
+    await recheck;
+    final after = container.read(openP2pMonitorProvider);
+    expect(after.isChecking, isFalse);
+    expect(after.status, OpenP2pStatus.connected);
+    expect(after.needsAttention, isFalse);
+  });
+
+  test('保存新站点与重新开启检测开关时自动静默刷新状态，关闭开关取消在途探测', () async {
+    final inFlight = Completer<bool>();
+    var probeCalls = 0;
+    final bridge = FakeOpenP2pBridge(isSupported: true, installed: true);
+    final container = await createContainer(
+      initialPrefs: {'network.check_openp2p': false},
+      bridge: bridge,
+      tcpProbe: (_, _, _) {
+        probeCalls++;
+        if (probeCalls == 1) return Future.value(false);
+        return inFlight.future;
+      },
+    );
+    final settingsNotifier = container.read(settingsProvider.notifier);
+
+    // 配置新站点（此时开关关闭，不探测）
+    await settingsNotifier.setSite(const SiteConfig(baseUrl: 'http://127.0.0.1:5244'));
+    await Future<void>.delayed(Duration.zero);
+    expect(probeCalls, 0);
+    expect(container.read(openP2pMonitorProvider).status, OpenP2pStatus.idle);
+
+    // 打开检测开关 → 自动静默探测（不弹窗）
+    await settingsNotifier.setCheckOpenP2pOnStart(true);
+    await Future<void>.delayed(const Duration(milliseconds: 20));
+    expect(probeCalls, 1);
+    final afterEnable = container.read(openP2pMonitorProvider);
+    expect(afterEnable.status, OpenP2pStatus.notRunning);
+    expect(afterEnable.shouldPrompt, isFalse);
+
+    // 更换新站点地址 → reset 后自动发起新一轮探测；挂起期间关闭开关应作废旧探测
+    await settingsNotifier.setSite(const SiteConfig(baseUrl: 'http://127.0.0.1:5245'));
+    await Future<void>.delayed(Duration.zero);
+    expect(probeCalls, 2);
+    expect(container.read(openP2pMonitorProvider).isChecking, isTrue);
+
+    await settingsNotifier.setCheckOpenP2pOnStart(false);
+    inFlight.complete(false);
+    await Future<void>.delayed(const Duration(milliseconds: 20));
+    expect(container.read(openP2pMonitorProvider).status, OpenP2pStatus.idle);
+    expect(container.read(openP2pMonitorProvider).isChecking, isFalse);
   });
 }

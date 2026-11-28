@@ -1,6 +1,7 @@
 /// OpenP2P 启动弹窗、首页提醒横幅、前后台复检与设置页开关组件测试。
 library;
 
+import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
 
@@ -211,6 +212,80 @@ void main() {
       await tester.pump();
       expect(tester.widget<SwitchListTile>(tileFinder).value, isFalse);
       expect(prefs.getBool('network.check_openp2p'), isFalse);
+    } finally {
+      await tearDownEnv(tester);
+    }
+  });
+
+  testWidgets('横幅点击重新检测期间保持挂载并显示检测中状态；切回前台 resumed 静默复检且不二次弹窗',
+      (tester) async {
+    await initEnv();
+    final bridge = FakeOpenP2pBridge(isSupported: true, installed: true, launchResult: true);
+    Completer<bool>? recheckCompleter;
+    var probeCount = 0;
+
+    try {
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            sharedPreferencesProvider.overrideWithValue(prefs),
+            settingsServiceProvider.overrideWithValue(SettingsService(prefs)),
+            dbProvider.overrideWithValue(db),
+            apiProvider.overrideWithValue(client),
+            playbackProvider.overrideWithValue(playback),
+            openP2pBridgeProvider.overrideWithValue(bridge),
+            openP2pTcpProbeProvider.overrideWithValue((_, _, _) {
+              probeCount++;
+              final pending = recheckCompleter;
+              if (pending != null) return pending.future;
+              return Future.value(serviceReady);
+            }),
+          ],
+          child: const App(),
+        ),
+      );
+
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 50));
+
+      // 启动弹窗出现，点击暂不启动
+      expect(find.byType(AlertDialog), findsOneWidget);
+      await tester.tap(find.text('暂不启动'));
+      await tester.pumpAndSettle();
+      expect(find.text('OpenP2P 未运行'), findsOneWidget);
+
+      // 点击横幅「重新检测」且探测挂起：横幅不消失、按钮显示「检测中」
+      recheckCompleter = Completer<bool>();
+      await tester.tap(find.text('重新检测'));
+      await tester.pump();
+      expect(find.text('OpenP2P 未运行'), findsOneWidget);
+      expect(find.text('检测中'), findsOneWidget);
+
+      // 仍未连通：按钮恢复为「重新检测」，且不二次弹窗
+      recheckCompleter.complete(false);
+      recheckCompleter = null;
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 50));
+      expect(find.text('OpenP2P 未运行'), findsOneWidget);
+      expect(find.text('重新检测'), findsOneWidget);
+      expect(find.byType(AlertDialog), findsNothing);
+
+      // 模拟切回前台 resumed（仍未连通）：静默复检但不二次弹窗
+      final beforeResumeCount = probeCount;
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 50));
+      expect(probeCount, greaterThan(beforeResumeCount));
+      expect(find.byType(AlertDialog), findsNothing);
+      expect(find.text('OpenP2P 未运行'), findsOneWidget);
+
+      // 模拟 OpenP2P 已启动后再切回前台 resumed：自动复检并隐藏横幅
+      serviceReady = true;
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 50));
+      expect(find.text('OpenP2P 未运行'), findsNothing);
+      expect(find.byType(AlertDialog), findsNothing);
     } finally {
       await tearDownEnv(tester);
     }
